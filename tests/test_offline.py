@@ -71,5 +71,14 @@ class Plan(unittest.TestCase):
         self.assertEqual((c.ctx, c.cache_type, c.n_cpu_moe, c.n_gpu_layers), (8192, "q8_0", 16, 999))
 
 
+class Sampler(unittest.TestCase):
+    def test_peak_sampler_starts_and_stops(self):
+        from marian.profile import PeakSampler
+        s = PeakSampler(every=0.05)
+        s.start()
+        s.stop()                       # 21/10/2026: a field named _stop shadowed Thread._stop and crashed here
+        self.assertFalse(s.is_alive())
+
+
 if __name__ == "__main__":
     unittest.main()

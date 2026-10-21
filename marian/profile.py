@@ -36,10 +36,10 @@ def sha256_head(path: Path, n: int = 64 * 2**20) -> str:
 class PeakSampler(threading.Thread):
     def __init__(self, every: float = 0.5):
         super().__init__(daemon=True)
-        self.every, self.vram, self.ram_low, self._stop = every, 0, 10**9, threading.Event()
+        self.every, self.vram, self.ram_low, self._halt = every, 0, 10**9, threading.Event()  # not _stop: Thread has one
 
     def run(self):
-        while not self._stop.is_set():
+        while not self._halt.is_set():
             used = machine.gpu_memory_used_mib()
             if used:
                 self.vram = max(self.vram, used[0])
@@ -47,7 +47,7 @@ class PeakSampler(threading.Thread):
             time.sleep(self.every)
 
     def stop(self):
-        self._stop.set()
+        self._halt.set()
         self.join(timeout=5)
 
 
