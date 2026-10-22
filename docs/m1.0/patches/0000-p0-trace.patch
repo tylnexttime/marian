@@ -1,0 +1,183 @@
+From 8512ed07263084d74f938c49f431cb8bfa335092 Mon Sep 17 00:00:00 2001
+From: tylnexttime <tylnexttime@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 15:16:28 +1100
+Subject: [PATCH] Marian P0: MoE cache and selective-copy trace
+ (MARIAN_MOE_TRACE)
+
+---
+ src/llama-context.cpp   | 22 +++++++++++++++++++
+ src/llama-moe-cache.cpp | 47 +++++++++++++++++++++++++++++++++++++++++
+ src/llama-moe-cache.h   |  8 +++++++
+ 3 files changed, 77 insertions(+)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index ca84fc40..c2dbbd75 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -14,7 +14,9 @@
+ #include "llama-sampler.h"
+ #include "llama.h"
+ 
++#include <algorithm>
+ #include <cinttypes>
++#include <cstdio>
+ #include <cmath>
+ #include <cstring>
+ #include <limits>
+@@ -2802,10 +2804,17 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+     const int64_t n_expert    = src->ne[2];
+     const size_t  expert_size = src->nb[2];
+ 
++    FILE * trace = llama_moe_trace_file();
++    const int64_t t0 = trace ? llama_moe_trace_us() : 0;
++    int64_t t1 = t0;
++    size_t n_cached = 0; // experts copied device-to-device from the MoE cache
++    size_t bytes_up = 0; // bytes uploaded from host memory
++
+     if (ids != st.ids || (int64_t) st.used.size() != n_expert) {
+         st.ids_data.resize(ggml_nbytes(ids)/sizeof(int32_t));
+         ggml_backend_tensor_get_async(backend, ids, st.ids_data.data(), 0, ggml_nbytes(ids));
+         ggml_backend_synchronize(backend);
++        t1 = trace ? llama_moe_trace_us() : 0;
+ 
+         st.used.assign(n_expert, false);
+         for (int64_t i1 = 0; i1 < ids->ne[1]; i1++) {
+@@ -2840,7 +2849,9 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+             }
+             if (next < e) {
+                 ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + next*expert_size, next*expert_size, (e - next)*expert_size);
++                bytes_up += (e - next)*expert_size;
+             }
++            n_cached += n;
+             e   += n;
+             next = e;
+         }
+@@ -2851,11 +2862,22 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+         const size_t size    = (last + 1 - next)*expert_size + padding;
+         if (size > 0) {
+             ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + offset, offset, size);
++            bytes_up += size;
+         }
+ 
+         first = last + 1;
+     }
+ 
++    if (trace) {
++        int il = -1;
++        std::sscanf(src->name, "blk.%d.", &il);
++        const size_t n_used = std::count(st.used.begin(), st.used.end(), true);
++        const int64_t t2 = llama_moe_trace_us();
++        // n_ids = selections in the batch; uniq = distinct experts used; uniq_hits = of those, copied from the cache
++        std::fprintf(trace, "L,%lld,%d,%lld,,%zu,%zu,%zu,%zu,%lld,%lld\n", (long long) t0, il, (long long) ggml_nelements(ids),
++            n_used, n_cached, n_used - std::min(n_used, n_cached), bytes_up, (long long) (t1 - t0), (long long) (t2 - t1));
++    }
++
+     return true;
+ }
+ 
+diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
+index 4d3596b2..415618a8 100644
+--- a/src/llama-moe-cache.cpp
++++ b/src/llama-moe-cache.cpp
+@@ -6,10 +6,35 @@
+ #include "ggml-cpp.h"
+ 
+ #include <algorithm>
++#include <chrono>
++#include <cstdio>
++#include <cstdlib>
+ #include <stdexcept>
+ #include <unordered_map>
+ #include <vector>
+ 
++FILE * llama_moe_trace_file() {
++    static FILE * f = [] () -> FILE * {
++        const char * path = std::getenv("MARIAN_MOE_TRACE");
++        if (path == nullptr || path[0] == '\0') {
++            return nullptr;
++        }
++        FILE * res = std::fopen(path, "w");
++        if (res != nullptr) {
++            std::setvbuf(res, nullptr, _IOFBF, 1 << 20);
++            // S: slot-map lookup (small batches); L: selective copy of one expert tensor (large batches)
++            std::fprintf(res, "kind,t_us,layer,n_ids,row_hits,uniq,uniq_hits,fills,bytes,us_wait,us_host\n");
++            std::atexit([] () { std::fflush(llama_moe_trace_file()); });
++        }
++        return res;
++    }();
++    return f;
++}
++
++int64_t llama_moe_trace_us() {
++    return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
++}
++
+ namespace {
+ 
+ // SLRU of the experts of a group of layers, the slot of each expert is kept in the slot map of its layer
+@@ -579,10 +604,22 @@ struct llama_moe_cache::impl {
+         }
+         GGML_ASSERT(ggml_is_contiguous(sel));
+ 
++        FILE * trace = llama_moe_trace_file();
++        const int64_t t0 = trace ? llama_moe_trace_us() : 0;
++
+         ids.resize(ggml_nelements(sel));
+         ggml_backend_tensor_get_async(backend, sel, ids.data(), 0, ggml_nbytes(sel));
+         ggml_backend_synchronize(backend);
+ 
++        const int64_t t1 = trace ? llama_moe_trace_us() : 0;
++        size_t row_hits = 0; // selections, counted per row, whose expert was resident before this step's fills
++        if (trace) {
++            const int32_t * slots_before = g.slru.slot_map[il];
++            for (int32_t e : ids) {
++                row_hits += slots_before[e] >= 0;
++            }
++        }
++
+         size_t n_hit = 0;
+         if (!g.slru.plan(il, ids.data(), ids.size(), fills, n_hit)) {
+             GGML_ABORT("the MoE cache is too small for the experts selected in layer %d", il);
+@@ -613,6 +650,16 @@ struct llama_moe_cache::impl {
+         // the next copy synchronizes the backend before it changes the slot map again
+         ggml_backend_tensor_set_async(backend, dst, src->data, 0, ggml_nbytes(src));
+ 
++        if (trace) {
++            const int64_t t2 = llama_moe_trace_us();
++            std::fprintf(trace, "S,%lld,%d,%zu,%zu,%zu,%zu,%zu,%zu,%lld,%lld\n", (long long) t0, il, ids.size(), row_hits,
++                n_hit + fills.size(), n_hit, fills.size(), bytes, (long long) (t1 - t0), (long long) (t2 - t1));
++            static size_t n_lines = 0;
++            if (++n_lines % 512 == 0) {
++                std::fflush(trace); // servers are usually killed, so do not rely on the atexit flush
++            }
++        }
++
+         return true;
+     }
+ 
+diff --git a/src/llama-moe-cache.h b/src/llama-moe-cache.h
+index 9baf0639..1b59c0f2 100644
+--- a/src/llama-moe-cache.h
++++ b/src/llama-moe-cache.h
+@@ -2,6 +2,9 @@
+ 
+ #include "ggml-backend.h"
+ 
++#include <cstdint>
++#include <cstdio>
++
+ #include <map>
+ #include <memory>
+ #include <vector>
+@@ -40,3 +43,8 @@ private:
+ };
+ 
+ using llama_moe_cache_ptr = std::unique_ptr<llama_moe_cache>;
++
++// Marian P0 trace: CSV lines for every MoE cache lookup and selective expert copy, written only when the environment
++// variable MARIAN_MOE_TRACE names a file; nullptr otherwise. llama_moe_trace_us is a steady clock in microseconds.
++FILE *  llama_moe_trace_file();
++int64_t llama_moe_trace_us();
+-- 
+2.45.1.windows.1
+

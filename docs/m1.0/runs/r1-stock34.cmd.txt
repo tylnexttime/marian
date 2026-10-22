@@ -1,0 +1,1 @@
+CMD: llama-server -m <models>\Swift-1.5-IQ2_XS\Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00001-of-00002.gguf --host 127.0.0.1 --port 8090 -c 20480 -ngl 99 -fa on -t 16 --parallel 1 --no-webui -ncmoe 34

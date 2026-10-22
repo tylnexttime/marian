@@ -1,0 +1,10 @@
+{
+  "tag": "r1-c6500",
+  "ready": true,
+  "load_s": 17.8,
+  "exited_early": false,
+  "peak_working_set_gib": 22.54,
+  "peak_private_commit_gib": 17.29,
+  "working_set_gib": 21.92,
+  "private_commit_gib": 16.96
+}

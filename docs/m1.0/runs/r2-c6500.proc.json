@@ -1,0 +1,10 @@
+{
+  "tag": "r2-c6500",
+  "ready": true,
+  "load_s": 23.7,
+  "exited_early": false,
+  "peak_working_set_gib": 22.45,
+  "peak_private_commit_gib": 17.29,
+  "working_set_gib": 21.63,
+  "private_commit_gib": 16.96
+}

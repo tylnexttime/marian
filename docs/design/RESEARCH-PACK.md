@@ -231,3 +231,29 @@ from that file (one line per block) and arithmetic on it.
   routed experts (Strata's canonical 1,382,400 B x 480 = 632.8 MiB, section 1, is a different layout).
 - Upstream's cache groups layers by layout (`llama-moe-cache.cpp:286-293`), so Swift forms **three groups** whose
   budgets are split by bytes (34 : 11 : 3 layers, weighted by size), not by routing need.
+
+## Addendum 2 by Claude Tyl (22/10/2026): Edge0 as prior art
+
+Sources read (metadata and docs only, nothing downloaded or run): GitHub `Edge0-AI/edge0` at commit
+`7a203f255355e2641ec39f8b9df1b5343f22f548` (Apache-2.0, pushed 21/10/2026) README; Hugging Face
+`Edge0/Edge0-35B-A3B-preview` at `3fe15cbf2bd5bbcdfd611035e1ac88971ff1cdab` (Apache-2.0) model card and file list;
+arXiv 2609.18063 abstract ("The Other Half of the Memory Wall: Serving 35B MoEs from SSD with Trained Routing
+Prediction"). Line numbers refer to the README and model card as fetched on 22/10.
+
+- **What it is:** a streaming MoE engine: experts stream from the SSD, a trained per-layer **prerouter** head predicts
+  the next layer's routing one token ahead, and an unmerged **recovery LoRA** compensates the int4 quantisation and
+  the routing replacement (README:33-47; abstract).
+- **The prediction replaces the router** ("the prediction is consumed as the routing itself, so the staged expert set
+  equals the routed set", abstract). That is **answer-changing** in Marian's terms (class A), and the LoRA makes it a
+  different model, not a faster path to the same one.
+- **Format and engines:** safetensors int4 checkpoint plus `lora_edge0_35b.safetensors` and
+  `prerouter_edge0_35b.safetensors` (model card file list; README:200-201); its own engines on MLX (Apple), Android
+  native, and Windows **C++ + Vulkan** (README:61-62); CUDA is "a reserved slot" / roadmap (README:89, 150). **No GGUF
+  and no llama.cpp path:** it cannot be measured in Marian's harness without its own engine.
+- **Numbers (theirs, Apple only):** `edge0-35b` 14.9-17.7 tok/s decode, 113/140 tok/s prefill, 2.9 GiB peak active
+  memory on a Mac mini M4 Pro 24 GB (README:126); abstract: 20 tok/s in 3 GiB on "a single 24GB machine".
+  Geometry: 40 layers, 256 experts, prerouter K=4 (README:72), i.e. the Qwen3.6-35B-A3B shape.
+- **What Marian can borrow, exactly:** a *trained* next-layer predictor used **only for prefetch** (P6), never as the
+  routing, keeps exact mode intact. Edge0's prerouter heads are trained for the 35B-A3B geometry, so they are a
+  candidate predictor for the floor-class model; licence Apache-2.0. Their measured prediction precision (in the paper,
+  not read here) is the number to compare with P6's router look-ahead.

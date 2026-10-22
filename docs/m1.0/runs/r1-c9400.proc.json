@@ -1,0 +1,10 @@
+{
+  "tag": "r1-c9400",
+  "ready": true,
+  "load_s": 23.4,
+  "exited_early": false,
+  "peak_working_set_gib": 22.5,
+  "peak_private_commit_gib": 20.13,
+  "working_set_gib": 22.28,
+  "private_commit_gib": 19.8
+}

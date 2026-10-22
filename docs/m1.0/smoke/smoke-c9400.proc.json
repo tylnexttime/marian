@@ -1,0 +1,10 @@
+{
+  "tag": "smoke-c9400",
+  "ready": true,
+  "load_s": 22.7,
+  "exited_early": false,
+  "peak_working_set_gib": 15.37,
+  "peak_private_commit_gib": 16.2,
+  "working_set_gib": 15.37,
+  "private_commit_gib": 16.2
+}

@@ -1,0 +1,10 @@
+file <models>\Swift-1.5-IQ2_XS\Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00002-of-00002.gguf (26.4 GiB), 400 blocks of 1510400 bytes
+mmap first touch             median   3650.7 us (  0.41 GB/s)  p10   2446.1  p90   5195.6 us  mean   0.41 GB/s
+mmap again (resident)        median    228.3 us (  6.62 GB/s)  p10    222.7  p90    248.6 us  mean   6.49 GB/s
+malloc pageable              median    225.2 us (  6.71 GB/s)  p10    221.8  p90    233.8 us  mean   6.62 GB/s
+cudaMallocHost pinned        median    147.2 us ( 10.26 GB/s)  p10    144.8  p90    166.9 us  mean  10.07 GB/s
+submit only, pinned          median      5.1 us (296.16 GB/s)  p10      4.6  p90      7.5 us  mean 252.15 GB/s
+submit only, pageable        median    122.5 us ( 12.33 GB/s)  p10    119.5  p90    132.1 us  mean  12.09 GB/s
+sync, idle stream            median      0.2 us (  0.01 GB/s)  p10      0.2  p90      0.2 us  mean   0.01 GB/s
+64 B D2H + sync (ids read)   median      7.4 us (  0.00 GB/s)  p10      6.9  p90     23.9 us  mean   0.00 GB/s
+DONE

@@ -1,0 +1,10 @@
+{
+  "tag": "r1-stock34",
+  "ready": true,
+  "load_s": 18.8,
+  "exited_early": false,
+  "peak_working_set_gib": 22.28,
+  "peak_private_commit_gib": 20.83,
+  "working_set_gib": 22.09,
+  "private_commit_gib": 20.5
+}

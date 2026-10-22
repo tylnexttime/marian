@@ -1,0 +1,10 @@
+{
+  "tag": "r2-c4000",
+  "ready": true,
+  "load_s": 24.8,
+  "exited_early": false,
+  "peak_working_set_gib": 22.83,
+  "peak_private_commit_gib": 14.85,
+  "working_set_gib": 22.0,
+  "private_commit_gib": 14.52
+}

@@ -1,0 +1,22 @@
+0.00.118.594 I srv  llama_server: initializing ...
+0.00.118.622 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.118.775 I srv  init_listene: The UI is disabled
+0.00.118.775 I srv  init_listene: Use --ui/--no-ui (or deprecated --webui/--no-webui) to enable/disable
+0.00.118.998 W srv  llama_server: security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)
+0.00.137.071 I srv    load_model: loading model '<models>\Swift-1.5-IQ2_XS\Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00001-of-00002.gguf'
+0.00.904.768 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already set by user to 99, abort
+0.01.298.462 W llama_model_loader: tensor overrides to CPU are used with mmap enabled - consider using --load-mode none for better performance
+0.15.504.406 I cmn          init: llama threadpool init, n_threads = 16
+0.21.483.715 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 20480, kv_unified = 'false'
+0.21.500.069 W srv          init: chat template supports preserving reasoning, it is enabled by default (may use more tokens, disable via --no-reasoning-preserve)
+0.21.500.412 I srv  llama_server: model loaded
+0.21.500.418 I srv  llama_server: listening on http://127.0.0.1:8090
+0.21.746.941 I slot get_availabl: id  0 | task -1 | selected slot by LRU, n_tokens = 0, t_last = -1
+0.21.747.269 I slot launch_slot_: id  0 | task 0 | processing task, is_child = 0
+0.35.491.434 I slot print_timing: id  0 | task 0 | prompt processing, n_tokens =     18, progress = 0.82, t =  13.74 s / 1.31 tokens per second
+1.03.155.706 I slot print_timing: id  0 | task 0 | prompt eval time =   16475.12 ms /    22 tokens (  748.87 ms per token,     1.34 tokens per second)
+1.03.155.714 I slot print_timing: id  0 | task 0 |        eval time =   24933.17 ms /    64 tokens (  395.76 ms per token,     2.53 tokens per second)
+1.03.155.715 I slot print_timing: id  0 | task 0 |       total time =   41408.29 ms /    86 tokens
+1.03.155.716 I slot print_timing: id  0 | task 0 |    graphs reused =         63
+1.03.155.716 I slot print_timing: id  0 | task 0 |   graph reallocs =          0    /     0        (same size) / (changed size)
+1.03.156.258 I slot      release: id  0 | task 0 | stop processing: n_tokens = 85, truncated = 0
