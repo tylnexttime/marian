@@ -1,0 +1,1292 @@
+title: 'Marian M1 design critique: per-expert VRAM residency on upstream llama.cpp'
+generated: 22/10/2026 12:11
+engine: critique harness v3.2
+stamp:
+  brief:
+    path: docs\design\critique\brief.md
+    sha256: dbbc2e680f33dbdee8b7495b351b9fc668a18c3d6ce6378f02cd7774bd317f0a
+    bytes: 4012
+    logical: brief.md
+  solution:
+  - path: docs\design\DESIGN-M1.md
+    sha256: 3a27a5a457e6abd6e54193554f36cde3b11bca81fee59e9231b1f5d5f0d5f60a
+    bytes: 34509
+    as_given: docs\design\DESIGN-M1.md
+    logical: docs/design/DESIGN-M1.md
+  - path: docs\design\RESEARCH-PACK.md
+    sha256: 1766f2266e2c4c0b54fa3db5cdbc1162ce0f5dd1ecd93aeed31afeb02666a40a
+    bytes: 69193
+    as_given: docs\design\RESEARCH-PACK.md
+    logical: docs/design/RESEARCH-PACK.md
+  - path: docs\design\ideas\claude-tyl-ideas-before-consult.md
+    sha256: e3fbcb14973f63f140cb881c9a97a5f2f9b1b88e4cdfbab7524c5a8fb6e42cd5
+    bytes: 6393
+    as_given: docs\design\ideas\claude-tyl-ideas-before-consult.md
+    logical: docs/design/ideas/claude-tyl-ideas-before-consult.md
+  - path: docs\design\ideas\astra-ideas.md
+    sha256: 81a82e3e9d56884de7972ccce65287456c694d8d030b91a8fb5e0feb0a316523
+    bytes: 35722
+    as_given: docs\design\ideas\astra-ideas.md
+    logical: docs/design/ideas/astra-ideas.md
+  - path: docs\design\ideas\fable-ideas.md
+    sha256: 53e4422d7bae5a7d2252ac85745a2afe1fb3c5e39ac9dbe23dfee91890e4617b
+    bytes: 40607
+    as_given: docs\design\ideas\fable-ideas.md
+    logical: docs/design/ideas/fable-ideas.md
+  - path: <research>\llama.cpp\src\llama-moe-cache.cpp
+    sha256: e540b105d487e6cb653ed5f66c4358d170f2b496d9aff0e51f7fa4809e4e4839
+    bytes: 27400
+    as_given: <research>\llama.cpp\src\llama-moe-cache.cpp
+    logical: <research>/llama.cpp/src/llama-moe-cache.cpp
+  run_date: 22/10/2026
+  started_utc: '2026-10-22T00:53:10Z'
+  stamped_at: run start
+  assurance: exact
+  assurance_means: the hashed bytes are exactly the text the models were given
+  apparatus:
+    skill: critique harness
+    skill_version: '3.2'
+    engine: critique harness v3.2
+    code:
+    - file: harness
+      sha256: 1bc3ec63a5281822782673a3455d482479fd4a7165ec633a33828bfb3a1f7d34
+    - file: harness
+      sha256: 49d0e671ad1c93328faba3e908d469307d0f018fbe78b7adccd1b4b028a6996c
+    - file: harness
+      sha256: d72d930bd3b894b8d315a131716053dee739e76a290346955a7f049eb3d05172
+    roles:
+      critics:
+      - model: sol
+        id: gpt-6-sol
+        family: OpenAI GPT
+        effort: high
+        lens: correctness
+      - model: luna
+        id: gpt-6-luna
+        family: OpenAI GPT
+        effort: max
+        lens: correctness
+      - model: astra
+        id: gpt-6-astra
+        family: OpenAI GPT
+        effort: medium
+        lens: operations
+      collator:
+      - model: sol
+        id: gpt-6-sol
+        family: OpenAI GPT
+        effort: high
+      refuters:
+      - model: sol
+        id: gpt-6-sol
+        family: OpenAI GPT
+        effort: high
+      - model: luna
+        id: gpt-6-luna
+        family: OpenAI GPT
+        effort: max
+      - model: astra
+        id: gpt-6-astra
+        family: OpenAI GPT
+        effort: medium
+      judges:
+      - model: luna
+        id: gpt-6-luna
+        family: OpenAI GPT
+        effort: max
+      - model: sol
+        id: gpt-6-sol
+        family: OpenAI GPT
+        effort: high
+      editor:
+      - model: sol
+        id: gpt-6-sol
+        family: OpenAI GPT
+        effort: high
+    sha256: 8fc419ebeba383b3476a74c7dc8f675f3dc6493777a2228ec37cd9480f60c16a
+rule: 'If the refuter refuted an item and BOTH judges say it is real (agree yes or partly), the judges win: the item goes
+  back into the ranked list, ranked by value like any other item, flagged ''refuter overruled by both judges'', with the case
+  for it and the refuter''s argument both kept. If only one judge or neither says it is real, the refutation stands: the item
+  stays out of the ranked list, in ''Refuted items'' with both arguments. A missing judge score means the refutation stands,
+  and the report says the overrule could not be assessed. The same rule applies to an item the collator marked REFUTED.'
+ordering: 'I ranked every item by the two judges’ mean quality plus mean urgency, highest first; ties go to lower combined
+  mean time and cost. Each item’s why gives its means as quality/urgency/time/cost. Time and cost are the judges’ relative
+  scores, not days. Deferred M2 correctness risks retain their high quality scores but rank below equally valuable M1 work
+  because their urgency is lower. No item qualified for removal under the refuter-versus-judge rule. C-01, C-06 and C-08 are
+  refuter_unverifiable: they remain in the value ranking, but access and clarification work belongs solely in brief_author_plan,
+  not action_plan. C-06 is ranked for completeness although the proposed design defect is rejected. There are no collator-REFUTED
+  items to place last.'
+counts:
+  collated: 24
+  refute_checked: 16
+  refuted: 0
+  survived: 13
+  unverifiable: 3
+  overruled: 0
+  final: 24
+degraded: []
+refuter_audit:
+  refute_checked: 16
+  refuted: 0
+  survived: 13
+  unverifiable: 3
+  overruled: 0
+  overrule_rate: null
+  one_judge_disagreed: 0
+  survived_both_judges_no: 0
+  not_assessable: 0
+  by_refuter:
+    luna:
+      family: OpenAI GPT
+      checked: 8
+      refuted: 0
+      unverifiable: 3
+      overruled: 0
+    sol:
+      family: OpenAI GPT
+      checked: 8
+      refuted: 0
+      unverifiable: 0
+      overruled: 0
+  collator_refuted: 0
+  collator_overruled: 0
+  refuter_families:
+  - OpenAI GPT
+  blind_manifests: 0
+  downgraded_by_manifest: 3
+  downgraded_by_wording_only: 0
+items:
+- rank: 1
+  cid: C-07
+  title: P1 does not define a valid bank-ready or exposed-wait timestamp
+  verdict: CONFIRMED
+  severity: High
+  action: fix now
+  why: Means 8.5/7.5/4.5/5. The callback synchronizes before planning but only submits asynchronous fills afterward. Callback
+    duration is neither bank-ready time nor avoidable drain time, yet M1.0 uses it to decide P5’s priority.
+  fix: Define routing-complete, planning, submission, transfer-complete and consumer-ready events; calculate exposed critical-path
+    wait. Report dropped traces and compare instrumentation-on with off.
+  time: 4.5
+  cost_effort: 5.0
+  quality: 8.5
+  urgency: 7.5
+  judge_spread: 2
+  agree_split: false
+  judges_disagree: ''
+  critic_ids:
+  - A-03
+  refute: survived (sol, OpenAI GPT)
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 2
+  cid: C-13
+  title: The parity gate does not enumerate the kernel row-count boundaries it identifies
+  verdict: CONFIRMED
+  severity: High
+  action: fix now
+  why: Means 8.5/6.5/4.5/4.5. E0–E2b do not require the identified 7-, 8- and 9-row dispatch cases or cache-capacity and large-batch
+    boundaries. A one-row pass cannot qualify those paths.
+  fix: Parameterize parity tests for 1, 7, 8, 9 and 32 rows, capacity fallback, large-batch selective copy and actual prefill
+    ubatches across all three Swift layouts; compare intermediate outputs and logits.
+  time: 4.5
+  cost_effort: 4.5
+  quality: 8.5
+  urgency: 6.5
+  judge_spread: 1
+  agree_split: false
+  judges_disagree: ''
+  critic_ids:
+  - L-03
+  refute: survived (sol, OpenAI GPT)
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 3
+  cid: C-20
+  title: Identical warm-up in fresh processes does not equalize page-cache history
+  verdict: CONFIRMED
+  severity: High
+  action: fix now
+  why: Means 7.5/7/3.5/4. Process exit retains OS-cached pages, and one arm may warm or displace the next arm’s data. This
+    can distort the decode floor and apparent optimisation gains; the older slowdown’s cause is not proven.
+  fix: Separate cold, controlled-warm and post-prefill runs; counterbalance order, freeze learning, log starting memory state,
+    physical reads and faults, and repeat A–A controls.
+  time: 3.5
+  cost_effort: 4.0
+  quality: 7.5
+  urgency: 7.0
+  judge_spread: 3
+  agree_split: false
+  judges_disagree: 'The judges agree on the defect but differ by three points on time: Luna expects a small protocol correction;
+    Sol includes several days of automation and repeated runs.'
+  critic_ids:
+  - A-04
+  refute: survived (sol, OpenAI GPT)
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 4
+  cid: C-02
+  title: The M1 governor cannot physically shrink upstream's fixed bank
+  verdict: CONFIRMED
+  severity: High
+  action: fix now
+  why: Means 8/6.5/6.5/7.5. The bank is allocated at construction. Invalidating slots or pausing admission cannot reclaim
+    VRAM, so the promised M1.3 response to a competing allocation cannot pass as written.
+  fix: Choose either supervised restart into a smaller parity-qualified plan or genuinely reclaimable bank segments with safe
+    reader draining and graph rebinding. Test recovered driver-budget usage, not merely slot occupancy.
+  time: 6.5
+  cost_effort: 7.5
+  quality: 8.0
+  urgency: 6.5
+  judge_spread: 1
+  agree_split: false
+  judges_disagree: ''
+  critic_ids:
+  - S-02
+  - L-02
+  - A-01
+  refute: survived (sol, OpenAI GPT)
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 5
+  cid: C-03
+  title: 'PERF: Put a minimal bounded expert source before the M1 throughput exit'
+  verdict: PLAUSIBLE
+  severity: High
+  action: fix now
+  why: Means 8/6/7/8. P3 is deferred although M1 requires sustained 12 tok/s. At an illustrative 85% byte hit rate, about
+    99 MiB/token still misses; storage service could dominate, but neither paging causality nor failure on the new pin is
+    measured. The byte-preserving remedy could have no gain without paging or recover a substantial post-prefill slowdown.
+  fix: First run matched cold and pp4096/16K-to-decode endurance tests. If the floor or stability fails, advance bounded RAM,
+    pinned staging and queued tail sourcing into M1, covering both small-cache fills and large-batch copies. Put source hooks
+    in llama.cpp and tier management above it.
+  time: 7.0
+  cost_effort: 8.0
+  quality: 8.0
+  urgency: 6.0
+  judge_spread: 0
+  agree_split: false
+  judges_disagree: ''
+  critic_ids:
+  - S-03
+  - A-02
+  refute: survived (luna, OpenAI GPT)
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 6
+  cid: C-16
+  title: The class-D default remains unresolved despite exact-by-default
+  verdict: CONFIRMED
+  severity: High
+  action: fix now
+  why: Means 8.5/5/1.5/1.5. Class D is explicitly non-bitwise, so allowing it as the advertised exact default would violate
+    a settled requirement. Neither judge says it is already enabled.
+  fix: Make class D off in the exact launch preset; give it an explicit non-bitwise option and test launcher defaults separately
+    from its quality gate.
+  time: 1.5
+  cost_effort: 1.5
+  quality: 8.5
+  urgency: 5.0
+  judge_spread: 1
+  agree_split: true
+  judges_disagree: 'Luna says yes and Sol partly: both see the policy conflict, but Sol stresses that this is an open decision,
+    not an observed output defect.'
+  critic_ids:
+  - L-06
+  refute: survived (sol, OpenAI GPT)
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 7
+  cid: C-23
+  title: Serving concurrency and memory-pressure admission are undefined
+  verdict: CONFIRMED
+  severity: High
+  action: fix now
+  why: Means 8/5.5/5.5/6. Another local request can change row geometry, cache path and peak workspace. The design promises
+    to pause or refuse requests without defining queue, timeout, cancellation or refusal outcomes.
+  fix: For M1, enforce one qualified active sequence or qualify concurrent schedules. Define bounded queuing and refusal through
+    upstream-server facilities; test realized rows, peak allocations and request outcomes.
+  time: 5.5
+  cost_effort: 6.0
+  quality: 8.0
+  urgency: 5.5
+  judge_spread: 1
+  agree_split: false
+  judges_disagree: ''
+  critic_ids:
+  - A-08
+  refute: survived (sol, OpenAI GPT)
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 8
+  cid: C-09
+  title: The Swift parity gate lacks its literal same-GPU all-resident oracle
+  verdict: CONFIRMED
+  severity: High
+  action: fix now
+  why: Means 8/5.5/6.5/7. Swift’s 33.02 GiB of routed experts cannot fit on the reference 16 GB GPU. E0, another model and
+    Swift GPU-path comparisons are useful surrogates, not the literal whole-Swift reference.
+  fix: State a per-operation equivalence obligation and its compositional assumptions, backed by the dispatch and shape matrix.
+    Add a larger-GPU whole-Swift comparison where feasible, without calling it the reference laptop’s same-GPU oracle.
+  time: 6.5
+  cost_effort: 7.0
+  quality: 8.0
+  urgency: 5.5
+  judge_spread: 2
+  agree_split: true
+  judges_disagree: Luna partly agrees because the design acknowledges the missing oracle and supplies surrogate gates; Sol
+    agrees that those gates cannot directly prove the literal contract.
+  critic_ids:
+  - S-07
+  refute: survived (luna, OpenAI GPT)
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 9
+  cid: C-10
+  title: A cache-off Swift comparison may not isolate an upstream cache exactness defect
+  verdict: PLAUSIBLE
+  severity: Medium
+  action: fix now
+  why: Means 6.5/6.5/2.5/3. Cache-off host weights might execute on CPU rather than through GPU selective copy. Expected CPU/GPU
+    last-bit differences would not prove a defective bank path.
+  fix: Record each compared expert operation’s backend, kernel and row count. Use two confirmed GPU paths for the bank/selective-copy
+    parity claim; label CPU comparisons separately.
+  time: 2.5
+  cost_effort: 3.0
+  quality: 6.5
+  urgency: 6.5
+  judge_spread: 3
+  agree_split: true
+  judges_disagree: Luna partly agrees because E2b also proposes a sound GPU selective-copy control; Sol agrees the additional
+    cache-on/off claim needs qualification. Their quality and urgency scores each differ by three points.
+  critic_ids: []
+  refute: survived (luna, OpenAI GPT)
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 10
+  cid: C-05
+  title: The proposed cache callback misses large-batch prefill routing
+  verdict: CONFIRMED
+  severity: High
+  action: fix now
+  why: Means 7/6/4.5/5. Above 32 tokens or the slot-capacity bound, routing bypasses the proposed cache copy() trace. A prefill-heavy
+    calibration could therefore persist incomplete phase counts.
+  fix: Use a shared router trace or instrument the selective-copy path as well. Preserve row and phase identity for P1 and
+    P4, and require expected selection counts on pp4096.
+  time: 4.5
+  cost_effort: 5.0
+  quality: 7.0
+  urgency: 6.0
+  judge_spread: 2
+  agree_split: true
+  judges_disagree: Luna partly agrees because the design already names an eval callback that can capture routing; Sol agrees
+    because it is not specified as P1/P4’s continuing large-batch source.
+  critic_ids:
+  - S-05
+  - A-03
+  refute: survived (luna, OpenAI GPT)
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 11
+  cid: C-15
+  title: Routing and timing profiles omit content and configuration invalidation
+  verdict: CONFIRMED
+  severity: Medium
+  action: fix now
+  why: Means 7/5.5/4.5/5. Tensor metadata and offsets do not identify changed router weights; a moved model, changed build
+    or KV setting can also make reused timing estimates stale. Wrong ranks hurt predictions, not expert arithmetic.
+  fix: Separate layout identity from verified model and adapter payload identity. Key timing plans by build, backend, KV/context
+    configuration and storage device; log each reuse or invalidation reason.
+  time: 4.5
+  cost_effort: 5.0
+  quality: 7.0
+  urgency: 5.5
+  judge_spread: 1
+  agree_split: false
+  judges_disagree: ''
+  critic_ids:
+  - L-05
+  - A-05
+  refute: not checked
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 12
+  cid: C-12
+  title: P5a must order slot-map lookup, not just the bank matmul
+  verdict: PLAUSIBLE
+  severity: High
+  action: fix next
+  why: Means 9.5/3/5/6. GET_ROWS precedes the bank matmul. Waiting only at the matmul could combine an old slot ID with newly
+    overwritten bank contents and silently compute the wrong expert.
+  fix: Gate map lookup on publication of its generation and bank consumption on the matching fill; use reader leases and stress
+    delayed writes and reuse before enabling P5a.
+  time: 5.0
+  cost_effort: 6.0
+  quality: 9.5
+  urgency: 3.0
+  judge_spread: 2
+  agree_split: false
+  judges_disagree: Both agree on the risk; Luna rates it High and Sol Critical. They agree it is conditional on the M2 implementation,
+    rather than a present upstream failure.
+  critic_ids:
+  - L-01
+  refute: survived (sol, OpenAI GPT)
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 13
+  cid: C-04
+  title: P5b has no specified intra-token host service for a cold tail miss
+  verdict: CONFIRMED
+  severity: High
+  action: fix next
+  why: Means 9.5/3/7.5/9. A layer waiting on a cold NVMe expert cannot finish if the host learns of its demand only from a
+    between-token miss-ring drain. A timeout does not supply the bytes.
+  fix: Prefer P5a for cold tails initially. Before enabling P5b, specify intra-token demand publication, a concurrent reader,
+    byte/flag ordering, errors and an exact timeout fallback; force cold misses and I/O errors in tests.
+  time: 7.5
+  cost_effort: 9.0
+  quality: 9.5
+  urgency: 3.0
+  judge_spread: 1
+  agree_split: false
+  judges_disagree: Both agree on the failure; Luna rates it High and Sol Critical. Its low current urgency reflects that P5b
+    is an optional M2 alternative.
+  critic_ids:
+  - S-04
+  refute: survived (luna, OpenAI GPT)
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 14
+  cid: C-24
+  title: Protected-core policy needs an explicit transient-capacity invariant
+  verdict: PLAUSIBLE
+  severity: High
+  action: fix now
+  why: Means 7/5/4/4.5. Upstream checks total group slots, not how many remain evictable after adding a protected core. A
+    cold selected set could fit the bank yet lack usable transient slots.
+  fix: Specify evictable capacity per group and supported row count, safe immediate core demotion and an early selective-copy
+    fallback; test all-core-cold selections before merging P2.
+  time: 4.0
+  cost_effort: 4.5
+  quality: 7.0
+  urgency: 5.0
+  judge_spread: 2
+  agree_split: false
+  judges_disagree: Both agree it needs a policy invariant; Luna rates the conditional gap Medium and Sol High because an unhandled
+    request could abort.
+  critic_ids: []
+  refute: not checked
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 15
+  cid: C-17
+  title: A ballast and RAM cap do not validate unlike machines
+  verdict: CONFIRMED
+  severity: High
+  action: fix next
+  why: Means 7.5/4.5/8.5/8.5. The proposed simulation retains the 4090’s kernels and link and Windows I/O. It can test capacity,
+    not Linux, a real 8 GB GPU, PCIe 3.0, a slower drive or another layout.
+  fix: Label ballast results capacity-only. Set a supported-machine matrix, real-hardware and alternative-layout qualification,
+    and explicit degraded, unsupported or refusal outcomes before claiming broad self-calibration.
+  time: 8.5
+  cost_effort: 8.5
+  quality: 7.5
+  urgency: 4.5
+  judge_spread: 1
+  agree_split: false
+  judges_disagree: ''
+  critic_ids:
+  - L-07
+  refute: survived (sol, OpenAI GPT)
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 16
+  cid: C-21
+  title: Automatic limit probes lack a safe resource envelope
+  verdict: CONFIRMED
+  severity: Medium
+  action: fix now
+  why: Means 6/5/3.5/4.5. Automatic cliff exploration and 1 GiB pinning steps have an available-memory floor but no complete
+    timeout, cancellation, commit/cgroup ceiling or recovery rule.
+  fix: Cap automatic probes conservatively; supervise allocations with deadlines and cleanup, and retain a conservative fallback
+    plan. Make destructive boundary exploration an opt-in diagnostic.
+  time: 3.5
+  cost_effort: 4.5
+  quality: 6.0
+  urgency: 5.0
+  judge_spread: 2
+  agree_split: false
+  judges_disagree: ''
+  critic_ids:
+  - A-06
+  refute: not checked
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 17
+  cid: C-08
+  title: A coarse standalone VRAM probe cannot certify the serving budget
+  verdict: PLAUSIBLE
+  severity: Medium
+  action: fix next
+  why: Means 6.5/4.5/4.5/4.5. A model-free 256 MiB-step probe cannot reproduce every server peak, but the design already budgets
+    context/workspace and confirms finalists live. The refuter makes that counterargument; both judges still want explicit
+    peak-context and competing-load qualification. The refuter’s asserted document access could not be verified, so ownership
+    remains with the brief author.
+  fix: Widen access to the complete design and research pack, then require loaded-server checks at requested context, peak
+    ubatch and controlled competition, refining the boundary and recording OOM and headroom.
+  time: 4.5
+  cost_effort: 4.5
+  quality: 6.5
+  urgency: 4.5
+  judge_spread: 1
+  agree_split: false
+  judges_disagree: ''
+  critic_ids:
+  - S-06
+  refute: unverifiable (luna, OpenAI GPT)
+  refuter_could_not_see:
+  - says it opened ../DESIGN-M1.md, which was not supplied to it
+  - says it opened ../RESEARCH-PACK.md, which was not supplied to it
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: true
+  owner: brief's author
+  owner_action: widen access to ../DESIGN-M1.md; ../RESEARCH-PACK.md, then re-run once
+- rank: 18
+  cid: C-11
+  title: 'PERF: Avoid making the entire ranked warm fill a first-token barrier'
+  verdict: PLAUSIBLE
+  severity: Medium
+  action: fix next
+  why: Means 5.5/4.5/4.5/4.5. The core’s fill size is unspecified. At an illustrative 2 GiB/s, deferring an unnecessary 8
+    GiB read could save about four seconds of cold-start I/O; steady-state gain may be zero or initially negative. This is
+    exact placement-only work.
+  fix: In llama.cpp P2 and the Marian launch plan, compare full warm fill with a small synchronous core and demand-prioritized,
+    lease-safe background fill. Measure cold TTFT and subsequent hits together.
+  time: 4.5
+  cost_effort: 4.5
+  quality: 5.5
+  urgency: 4.5
+  judge_spread: 1
+  agree_split: true
+  judges_disagree: Luna partly agrees because the core need not occupy the whole bank; Sol agrees that its unspecified size
+    can create a first-token barrier. Neither treats the four-second illustration as measured.
+  critic_ids:
+  - S-09
+  refute: not checked
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 19
+  cid: C-01
+  title: Bind expert sidecars to payload bytes, not just tensor metadata
+  verdict: PLAUSIBLE
+  severity: Medium
+  action: fix next
+  why: Means 7/2.5/4/4. A shape-compatible stale sidecar could break bitwise exactness. The refuter argues that a full-identity
+    safeguard already exists in design section 11 and that the metadata hash is only for routing profiles. Sol finds that
+    quoted safeguard in the ideas, not DESIGN-M1.md; Luna sees an already recognised risk but wants payload-level detail.
+    The refuter’s asserted access could not be verified. No sidecar is in M1.
+  fix: The brief author should make the complete design and cited materials accessible and establish which text is authoritative.
+    Specify verified source-payload identity, sidecar-record checks, atomic publication and mismatch refusal before optional
+    P3 sidecars are enabled.
+  time: 4.0
+  cost_effort: 4.0
+  quality: 7.0
+  urgency: 2.5
+  judge_spread: 6
+  agree_split: true
+  judges_disagree: Luna partly agrees and scores quality 4; Sol agrees and scores 10. They differ by six quality points and
+    four on both time and cost because Luna views this chiefly as clarification, while Sol includes implementation and payload
+    verification.
+  critic_ids:
+  - S-01
+  refute: unverifiable (luna, OpenAI GPT)
+  refuter_could_not_see:
+  - says it opened ../DESIGN-M1.md, which was not supplied to it
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: true
+  owner: brief's author
+  owner_action: widen access to ../DESIGN-M1.md, then re-run once
+- rank: 20
+  cid: C-22
+  title: Learned profiles and fortnightly rebases lack crash-safe rollback rules
+  verdict: CONFIRMED
+  severity: Medium
+  action: fix next
+  why: Means 5.5/3.5/4.5/4.5. P4 writes counts at exit without specified atomicity, concurrent-writer rules or compatibility
+    across rebases. A crash may simply lose learning; a partial or incompatible publication has a greater recovery cost.
+  fix: Version and atomically replace profiles, coordinate writers and test interruption. Retain a last-known-good compatible
+    binary, plan and profile for rollback.
+  time: 4.5
+  cost_effort: 4.5
+  quality: 5.5
+  urgency: 3.5
+  judge_spread: 1
+  agree_split: false
+  judges_disagree: ''
+  critic_ids:
+  - A-07
+  refute: not checked
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 21
+  cid: C-14
+  title: Unbuffered expert reads need an explicit alignment and fallback contract
+  verdict: PLAUSIBLE
+  severity: Medium
+  action: fix next
+  why: Means 6/3/4.5/5. Direct I/O requires appropriate offset, length and buffer alignment; unspecified failure or silent
+    buffered fallback could break cold reads or restore page-cache churn on another machine.
+  fix: In the P3 source, discover platform alignment, round reads outward into aligned buffers, trim to exact expert bytes
+    and make bounded, measured buffered fallback explicit. Test real shard offsets on Windows and Linux.
+  time: 4.5
+  cost_effort: 5.0
+  quality: 6.0
+  urgency: 3.0
+  judge_spread: 1
+  agree_split: false
+  judges_disagree: ''
+  critic_ids:
+  - L-04
+  refute: not checked
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 22
+  cid: C-19
+  title: 'PERF: Preserve coalescing and measure fill-submission overhead'
+  verdict: PLAUSIBLE
+  severity: Low
+  action: park
+  why: Means 4.5/3.5/4/4. Uploads merge only when source expert IDs and destination slots are consecutive; P2 could fragment
+    them. An exact placement or transfer change might yield 0–5% decode gain, but neither exposed submission cost nor a CUDA
+    12.8 batching remedy is established. Revive if P2 traces show material exposed submission time or a regression despite
+    better hit rates.
+  fix: Count upload runs and submission microseconds in the llama.cpp P2/P3 path. Only then test contiguous eligible-slot
+    choices or unchanged-byte packed staging; do not assume CUDA-13 microbenchmark gains.
+  time: 4.0
+  cost_effort: 4.0
+  quality: 4.5
+  urgency: 3.5
+  judge_spread: 2
+  agree_split: false
+  judges_disagree: Both partly agree; Luna rates the likely bounded effect Low, while Sol rates it Medium pending measurement.
+  critic_ids:
+  - L-09
+  - A-09
+  refute: not checked
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+- rank: 23
+  cid: C-06
+  title: Distinct-expert cache counters are not row-level lookup hits
+  verdict: CONFIRMED
+  severity: Low
+  action: reject
+  why: Means 3.5/2.5/2.5/2.5. Upstream plan() counts distinct experts, so that counter would misstate multirow lookup hits
+    if reused. The refuter notes that the design instead specifies per-token IDs and hits over 480 selections; Luna finds
+    no stated misuse, and Sol sees only an implementation precaution. The refuter’s asserted design access could not be verified,
+    so the item remains ranked and brief-author owned rather than procedurally refuted.
+  fix: No design correction established. The brief author should expose the authoritative P1 metric specification and add
+    a duplicate-ID check distinguishing pre-admission row hits from distinct fills.
+  time: 2.5
+  cost_effort: 2.5
+  quality: 3.5
+  urgency: 2.5
+  judge_spread: 5
+  agree_split: true
+  judges_disagree: Luna says no; Sol partly agrees as a preventative check. Quality differs by five points, and urgency, time
+    and cost each by three. Both reject a claim that the written M1 single-token metric is already wrong.
+  critic_ids:
+  - S-08
+  - A-03
+  refute: unverifiable (luna, OpenAI GPT)
+  refuter_could_not_see:
+  - says it opened ../DESIGN-M1.md, which was not supplied to it
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: true
+  owner: brief's author
+  owner_action: widen access to ../DESIGN-M1.md, then re-run once
+- rank: 24
+  cid: C-18
+  title: 'PERF: Measure eight total verification rows before capping at seven'
+  verdict: CONFIRMED
+  severity: Low
+  action: park
+  why: Means 3/2/2.5/2. The eighth row moves IQ2_S to MMQ but avoids the identified nine-row IQ1_M fallback. It might yield
+    0–10% on favourable high-acceptance work or regress. Revive in M3 after opt-in speculation and its parity rig are available;
+    this is not bitwise-exact M1 acceleration.
+  fix: In the layer on top, benchmark seven versus eight total verify rows using kernels, expert bytes and milliseconds per
+    committed token; retain the better qualified cap.
+  time: 2.5
+  cost_effort: 2.0
+  quality: 3.0
+  urgency: 2.0
+  judge_spread: 1
+  agree_split: true
+  judges_disagree: Luna agrees it merits a test; Sol partly agrees because omitting that test is not a demonstrated speed
+    loss.
+  critic_ids:
+  - L-08
+  refute: not checked
+  refuter_could_not_see: []
+  refuter_overruled: false
+  collator_overruled: false
+  refuter_unverifiable: false
+  owner: solution's author
+  owner_action: 'fix: see the action'
+by_owner:
+  solution_author:
+    who: Claude Tyl
+    items:
+    - rank: 1
+      cid: C-07
+      title: P1 does not define a valid bank-ready or exposed-wait timestamp
+      action: fix now
+      owner_action: 'fix: see the action'
+    - rank: 2
+      cid: C-13
+      title: The parity gate does not enumerate the kernel row-count boundaries it identifies
+      action: fix now
+      owner_action: 'fix: see the action'
+    - rank: 3
+      cid: C-20
+      title: Identical warm-up in fresh processes does not equalize page-cache history
+      action: fix now
+      owner_action: 'fix: see the action'
+    - rank: 4
+      cid: C-02
+      title: The M1 governor cannot physically shrink upstream's fixed bank
+      action: fix now
+      owner_action: 'fix: see the action'
+    - rank: 5
+      cid: C-03
+      title: 'PERF: Put a minimal bounded expert source before the M1 throughput exit'
+      action: fix now
+      owner_action: 'fix: see the action'
+    - rank: 6
+      cid: C-16
+      title: The class-D default remains unresolved despite exact-by-default
+      action: fix now
+      owner_action: 'fix: see the action'
+    - rank: 7
+      cid: C-23
+      title: Serving concurrency and memory-pressure admission are undefined
+      action: fix now
+      owner_action: 'fix: see the action'
+    - rank: 8
+      cid: C-09
+      title: The Swift parity gate lacks its literal same-GPU all-resident oracle
+      action: fix now
+      owner_action: 'fix: see the action'
+    - rank: 9
+      cid: C-10
+      title: A cache-off Swift comparison may not isolate an upstream cache exactness defect
+      action: fix now
+      owner_action: 'fix: see the action'
+    - rank: 10
+      cid: C-05
+      title: The proposed cache callback misses large-batch prefill routing
+      action: fix now
+      owner_action: 'fix: see the action'
+    - rank: 11
+      cid: C-15
+      title: Routing and timing profiles omit content and configuration invalidation
+      action: fix now
+      owner_action: 'fix: see the action'
+    - rank: 12
+      cid: C-12
+      title: P5a must order slot-map lookup, not just the bank matmul
+      action: fix next
+      owner_action: 'fix: see the action'
+    - rank: 13
+      cid: C-04
+      title: P5b has no specified intra-token host service for a cold tail miss
+      action: fix next
+      owner_action: 'fix: see the action'
+    - rank: 14
+      cid: C-24
+      title: Protected-core policy needs an explicit transient-capacity invariant
+      action: fix now
+      owner_action: 'fix: see the action'
+    - rank: 15
+      cid: C-17
+      title: A ballast and RAM cap do not validate unlike machines
+      action: fix next
+      owner_action: 'fix: see the action'
+    - rank: 16
+      cid: C-21
+      title: Automatic limit probes lack a safe resource envelope
+      action: fix now
+      owner_action: 'fix: see the action'
+    - rank: 18
+      cid: C-11
+      title: 'PERF: Avoid making the entire ranked warm fill a first-token barrier'
+      action: fix next
+      owner_action: 'fix: see the action'
+    - rank: 20
+      cid: C-22
+      title: Learned profiles and fortnightly rebases lack crash-safe rollback rules
+      action: fix next
+      owner_action: 'fix: see the action'
+    - rank: 21
+      cid: C-14
+      title: Unbuffered expert reads need an explicit alignment and fallback contract
+      action: fix next
+      owner_action: 'fix: see the action'
+    - rank: 22
+      cid: C-19
+      title: 'PERF: Preserve coalescing and measure fill-submission overhead'
+      action: park
+      owner_action: 'fix: see the action'
+    - rank: 24
+      cid: C-18
+      title: 'PERF: Measure eight total verification rows before capping at seven'
+      action: park
+      owner_action: 'fix: see the action'
+  brief_author:
+    who: Claude Tyl
+    items:
+    - rank: 17
+      cid: C-08
+      title: A coarse standalone VRAM probe cannot certify the serving budget
+      action: fix next
+      owner_action: widen access to ../DESIGN-M1.md; ../RESEARCH-PACK.md, then re-run once
+    - rank: 19
+      cid: C-01
+      title: Bind expert sidecars to payload bytes, not just tensor metadata
+      action: fix next
+      owner_action: widen access to ../DESIGN-M1.md, then re-run once
+    - rank: 23
+      cid: C-06
+      title: Distinct-expert cache counters are not row-level lookup hits
+      action: reject
+      owner_action: widen access to ../DESIGN-M1.md, then re-run once
+  no_action:
+    who: nobody (refuted)
+    items: []
+brief_author_plan: For refuter_unverifiable C-01, C-06 and C-08, widen access to the actual DESIGN-M1.md and cited research
+  pack and record which text the refuter reviewed. Resolve C-01’s conflicting claim about whether payload-level sidecar binding
+  is already specified; publish an authoritative requirement before sidecars are used. For C-06, expose the intended row-level
+  metric and a duplicate-ID acceptance check, without claiming a current miscount. For C-08, make explicit whether live confirmation
+  must exercise requested context, peak ubatch and competing allocations. Keep these three out of the solution-author action
+  plan until that access and scope work is complete.
+resolution:
+  ever_unverifiable: 3
+  resolved: 0
+  resolution_rate: 0.0
+  open: 3
+  escalated: 0
+  escalated_items: []
+  this_run:
+    resolved: []
+    escalated: []
+    first_time:
+    - cid: C-01
+      key: ed5f59098b9a7517
+      title: Bind expert sidecars to payload bytes, not just tensor metadata
+      prior_unverifiable_runs: 0
+    - cid: C-06
+      key: cb1535cda2b3d53f
+      title: Distinct-expert cache counters are not row-level lookup hits
+      prior_unverifiable_runs: 0
+    - cid: C-08
+      key: dd2e6d31f87f34b2
+      title: A coarse standalone VRAM probe cannot certify the serving budget
+      prior_unverifiable_runs: 0
+refute_manifests:
+  C-01:
+    model_verdict: REFUTED
+    verdict: UNVERIFIABLE
+    relied_on:
+    - file: ../DESIGN-M1.md
+      status: opened
+      supplied: false
+    manifest_check:
+      blind: false
+      problems:
+      - says it opened ../DESIGN-M1.md, which was not supplied to it
+  C-03:
+    model_verdict: SURVIVES
+    verdict: SURVIVES
+    relied_on:
+    - file: ../DESIGN-M1.md
+      status: opened
+      supplied: false
+    - file: ../RESEARCH-PACK.md
+      status: opened
+      supplied: false
+    - file: ../../../../marian-research/llama.cpp/src/llama-moe-cache.cpp
+      status: opened
+      supplied: true
+    manifest_check:
+      blind: false
+      problems:
+      - says it opened ../DESIGN-M1.md, which was not supplied to it
+      - says it opened ../RESEARCH-PACK.md, which was not supplied to it
+  C-04:
+    model_verdict: SURVIVES
+    verdict: SURVIVES
+    relied_on:
+    - file: ../DESIGN-M1.md
+      status: opened
+      supplied: false
+    manifest_check:
+      blind: false
+      problems:
+      - says it opened ../DESIGN-M1.md, which was not supplied to it
+  C-05:
+    model_verdict: SURVIVES
+    verdict: SURVIVES
+    relied_on:
+    - file: ../DESIGN-M1.md
+      status: opened
+      supplied: false
+    - file: ../RESEARCH-PACK.md
+      status: opened
+      supplied: false
+    - file: ../../../../marian-research/llama.cpp/src/llama-moe-cache.cpp
+      status: opened
+      supplied: true
+    manifest_check:
+      blind: false
+      problems:
+      - says it opened ../DESIGN-M1.md, which was not supplied to it
+      - says it opened ../RESEARCH-PACK.md, which was not supplied to it
+  C-06:
+    model_verdict: REFUTED
+    verdict: UNVERIFIABLE
+    relied_on:
+    - file: ../DESIGN-M1.md
+      status: opened
+      supplied: false
+    - file: ../../../../marian-research/llama.cpp/src/llama-moe-cache.cpp
+      status: opened
+      supplied: true
+    manifest_check:
+      blind: false
+      problems:
+      - says it opened ../DESIGN-M1.md, which was not supplied to it
+  C-08:
+    model_verdict: REFUTED
+    verdict: UNVERIFIABLE
+    relied_on:
+    - file: ../DESIGN-M1.md
+      status: opened
+      supplied: false
+    - file: ../RESEARCH-PACK.md
+      status: opened
+      supplied: false
+    manifest_check:
+      blind: false
+      problems:
+      - says it opened ../DESIGN-M1.md, which was not supplied to it
+      - says it opened ../RESEARCH-PACK.md, which was not supplied to it
+  C-09:
+    model_verdict: SURVIVES
+    verdict: SURVIVES
+    relied_on:
+    - file: ../DESIGN-M1.md
+      status: opened
+      supplied: false
+    - file: ../RESEARCH-PACK.md
+      status: opened
+      supplied: false
+    manifest_check:
+      blind: false
+      problems:
+      - says it opened ../DESIGN-M1.md, which was not supplied to it
+      - says it opened ../RESEARCH-PACK.md, which was not supplied to it
+  C-10:
+    model_verdict: SURVIVES
+    verdict: SURVIVES
+    relied_on:
+    - file: ../DESIGN-M1.md
+      status: opened
+      supplied: false
+    - file: ../RESEARCH-PACK.md
+      status: opened
+      supplied: false
+    manifest_check:
+      blind: false
+      problems:
+      - says it opened ../DESIGN-M1.md, which was not supplied to it
+      - says it opened ../RESEARCH-PACK.md, which was not supplied to it
+  C-02:
+    model_verdict: SURVIVES
+    verdict: SURVIVES
+    relied_on:
+    - file: docs/design/DESIGN-M1.md
+      status: opened
+      supplied: true
+    - file: llama.cpp/src/llama-moe-cache.cpp
+      status: opened
+      supplied: true
+    manifest_check:
+      blind: false
+      problems: []
+  C-07:
+    model_verdict: SURVIVES
+    verdict: SURVIVES
+    relied_on:
+    - file: docs/design/DESIGN-M1.md
+      status: opened
+      supplied: true
+    - file: llama.cpp/src/llama-moe-cache.cpp
+      status: opened
+      supplied: true
+    manifest_check:
+      blind: false
+      problems: []
+  C-12:
+    model_verdict: SURVIVES
+    verdict: SURVIVES
+    relied_on:
+    - file: docs/design/DESIGN-M1.md
+      status: opened
+      supplied: true
+    - file: docs/design/RESEARCH-PACK.md
+      status: opened
+      supplied: true
+    - file: llama.cpp/src/llama-moe-cache.cpp
+      status: opened
+      supplied: true
+    manifest_check:
+      blind: false
+      problems: []
+  C-13:
+    model_verdict: SURVIVES
+    verdict: SURVIVES
+    relied_on:
+    - file: docs/design/DESIGN-M1.md
+      status: opened
+      supplied: true
+    - file: llama.cpp/src/llama-moe-cache.cpp
+      status: opened
+      supplied: true
+    manifest_check:
+      blind: false
+      problems: []
+  C-16:
+    model_verdict: SURVIVES
+    verdict: SURVIVES
+    relied_on:
+    - file: brief
+      status: opened
+      supplied: true
+    - file: docs/design/DESIGN-M1.md
+      status: opened
+      supplied: true
+    manifest_check:
+      blind: false
+      problems: []
+  C-17:
+    model_verdict: SURVIVES
+    verdict: SURVIVES
+    relied_on:
+    - file: brief
+      status: opened
+      supplied: true
+    - file: docs/design/DESIGN-M1.md
+      status: opened
+      supplied: true
+    manifest_check:
+      blind: false
+      problems: []
+  C-20:
+    model_verdict: SURVIVES
+    verdict: SURVIVES
+    relied_on:
+    - file: docs/design/DESIGN-M1.md
+      status: opened
+      supplied: true
+    - file: docs/design/RESEARCH-PACK.md
+      status: opened
+      supplied: true
+    manifest_check:
+      blind: false
+      problems: []
+  C-23:
+    model_verdict: SURVIVES
+    verdict: SURVIVES
+    relied_on:
+    - file: docs/design/DESIGN-M1.md
+      status: opened
+      supplied: true
+    - file: llama.cpp/src/llama-moe-cache.cpp
+      status: opened
+      supplied: true
+    manifest_check:
+      blind: false
+      problems: []
+refuted: []
+brief_challenges:
+- challenge: Define the 85% target independently of stock's arithmetic 33% layer share and Strata's 85.4% aggregate under
+    different execution settings.
+  kind: framing
+  raised_by:
+  - sol
+  - luna
+  - astra
+  why_it_matters: Median per-token lookups, aggregate lookups, byte hits and bytes per committed token can differ. Specify
+    matched workload, budget, warm state, batching and denominator.
+- challenge: 'Identify the available exactness oracle for Swift: all of its routed experts cannot reside on the reference
+    16 GB GPU.'
+  kind: missing scope
+  raised_by:
+  - sol
+  - astra
+  why_it_matters: Single-layer and alternative-path parity are useful but do not literally execute the stipulated whole-Swift
+    same-GPU reference.
+- challenge: Replace unrestricted 'any machine' success language with a supported matrix and explicit degraded, unsupported
+    or refusal outcomes.
+  kind: wrong assumption
+  raised_by:
+  - sol
+  - luna
+  - astra
+  why_it_matters: An 8 GB ballast and RAM cap cannot reproduce another GPU, Linux, PCIe 3.0 or slow NVMe; calibration cannot
+    guarantee useful throughput from insufficient resources.
+- challenge: Specify deployment and rollback deliverables separately from feature completion.
+  kind: missing scope
+  raised_by:
+  - astra
+  why_it_matters: A supported-configuration matrix, launch checks, health/error semantics, diagnostics and rollback are needed
+    before a newcomer can rely on the calibration.
+data_checks:
+- cid: C-03
+  kind: command
+  check: On the pinned build, run read-only llama-bench decode at matched cache budgets both alone and immediately after pp4096/pp16K;
+    record tok/s, physical disk reads, faults and available RAM without clearing caches.
+  settles: Whether unmanaged expert sourcing actually threatens the M1 decode floor on the reference workload.
+- cid: C-06
+  kind: read
+  check: Feed a synthetic multirow ID trace containing duplicate experts through plan() and independently count row-level
+    pre-admission residency.
+  settles: The precise difference between upstream distinct-expert counters and the proposed lookup denominator.
+- cid: C-07
+  kind: command
+  check: Instrument a pinned-build run with host timestamps plus GPU completion events around ID retrieval, fill submission,
+    slot-map publication and consumer execution; compare against an instrumentation-off run.
+  settles: Avoidable drain time versus preceding GPU work, actual bank-ready time and tracing overhead.
+- cid: C-08
+  kind: command
+  check: Compare the standalone probe's predicted safe budget with loaded-server runs at requested context and peak ubatch,
+    including a controlled competing GPU allocation; sample driver local-budget usage and throughput.
+  settles: Whether the proposed probe predicts a safe serving allocation rather than only a small-operation bound.
+- cid: C-10
+  kind: read
+  check: For matched Swift cache-on, cache-off and selective-copy runs, inspect per-expert operation/backend traces and row
+    counts before comparing saved logits.
+  settles: Whether E2b isolates two GPU numerical paths or inadvertently includes CPU computation.
+- cid: C-11
+  kind: command
+  check: For identical short prompts, measure cold TTFT and subsequent hit rate with full ranked warm fill versus a small
+    synchronous core and deferred fill; record bytes physically read before first token.
+  settles: Whether deferred warm fill improves startup without an unacceptable hit-rate cost.
+- cid: C-13
+  kind: read
+  check: Generate a parity matrix of actual kernel/backend and intermediate-output hashes for rows 1, 7, 8, 9, 32, capacity
+    fallback and selected large ubatches, for all three Swift layouts.
+  settles: Which disclosed dispatch boundaries the exactness gate really covers.
+- cid: C-18
+  kind: command
+  check: On matched high-acceptance prompts, compare opt-in seven- and eight-total-row verification by committed tokens, expert
+    bytes and wall milliseconds, recording selected kernels.
+  settles: Whether the eighth row pays despite the IQ2_S MMQ transition.
+- cid: C-19
+  kind: command
+  check: On recorded demand traces, count contiguous upload runs and host submission microseconds before and after ranked/transient
+    placement; separately test any packed transfer on CUDA 12.8.
+  settles: Whether fragmented fills create material exposed submission overhead and whether batching recovers it.
+- cid: C-20
+  kind: command
+  check: Across counterbalanced ABBA rounds, record physical model reads, available RAM and faults at the start and during
+    each arm; interleave repeated A-A controls.
+  settles: Whether the claimed equivalent page-cache starting states and noise floor hold.
+- cid: C-23
+  kind: command
+  check: Using the qualified server configuration, submit one then two simultaneous local requests while recording realized
+    rows per MUL_MAT_ID, cache-path selection, peak VRAM and request outcomes.
+  settles: Whether concurrency changes numerical-path geometry or exceeds the calibrated memory envelope.
+problems: []
