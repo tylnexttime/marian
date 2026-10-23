@@ -1,0 +1,219 @@
+From aa381ca46c21516e553db5e554541a889ff3d212 Mon Sep 17 00:00:00 2001
+From: tylnexttime <tylnexttime@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 07:49:21 +1100
+Subject: [PATCH 1/3] Marian M1.1 exactness: per-group slot floor for the
+ slot-map path (C-24, C-10)
+
+M1.0 found that at --moe-cache-mib 4000 the three IQ1_M layers of Swift (one
+cache group) had 181 slots, fewer than a 19-28 token prompt step selects
+(n_tokens x n_expert_used). get_slot_map then sent those steps off the cache
+path, and below the op offload batch size (32) their host experts were
+computed on the CPU: 3 prompt steps, 3 of 10 greedy answers changed.
+
+Every group now gets, before the rest of the budget is split,
+  n_floor = min(min(n_ubatch, 32) * n_expert_used, n_expert)
+slots: the distinct experts of one layer that the largest ubatch on the
+slot-map path can select (32 = max_batch). A group whose share by bytes is
+below its floor is held at the floor and the other groups split the rest by
+bytes, so the split is unchanged whenever no floor binds. If the budget of a
+device cannot cover the floors, the constructor throws with the minimum
+--moe-cache-mib, instead of upstream's silent "not cached" (which also
+computes on the CPU). Per-group slots, MiB and floor are logged at load
+(INFO); a group held at its floor is logged as a WARN. A WARN also notes
+--no-op-offload, under which large ubatches compute host experts on the CPU.
+
+Swift 1.5 IQ2_XS, n_ubatch 512: floor 320 slots per group, 1,223 MiB for the
+three floors; the floor binds below about 7,066 MiB (IQ1_M group).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/llama-context.cpp   |   2 +-
+ src/llama-moe-cache.cpp | 102 +++++++++++++++++++++++++++++++++-------
+ src/llama-moe-cache.h   |   5 +-
+ 3 files changed, 89 insertions(+), 20 deletions(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index c2dbbd75..8ac15567 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -561,7 +561,7 @@ llama_context::llama_context(
+         }
+ 
+         if (cparams.moe_cache_size > 0) {
+-            moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size);
++            moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size, cparams.n_ubatch, cparams.op_offload);
+         }
+ 
+         sched_reserve();
+diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
+index 415618a8..dcbe5070 100644
+--- a/src/llama-moe-cache.cpp
++++ b/src/llama-moe-cache.cpp
+@@ -7,6 +7,7 @@
+ 
+ #include <algorithm>
+ #include <chrono>
++#include <cmath>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <stdexcept>
+@@ -231,6 +232,8 @@ struct llama_moe_cache::impl {
+         std::vector<ggml_tensor *> banks; // device storage of all slots, one per expert tensor
+         size_t host_bytes = 0;
+         int32_t n_slots = 0;
++        int32_t n_floor = 0;              // slots for the largest ubatch on the slot-map path (Marian M1.1)
++        bool at_floor = false;            // its share of the budget by bytes was below the floor
+         moe_cache_slru slru;
+     };
+ 
+@@ -277,7 +280,8 @@ struct llama_moe_cache::impl {
+     // views used by copy_experts
+     ggml_context_ptr ctx_views;
+ 
+-    impl(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size) :
++    impl(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size,
++            uint32_t n_ubatch, bool op_offload) :
+             n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()) {
+         for (size_t i = 0; i < backends.size(); ++i) {
+             const auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backends[i]));
+@@ -366,21 +370,76 @@ struct llama_moe_cache::impl {
+             }
+         }
+ 
+-        // within a device the budget is split by the size of the experts, so each group caches the same fraction of its experts
++        // Marian M1.1, exact mode (design C-24, C-10): every group gets at least the slots for the largest ubatch that can take
++        // the slot-map path (get_slot_map): n_floor = min(min(n_ubatch, max_batch)*n_expert_used, n_expert) distinct experts of
++        // one layer. With fewer slots such a ubatch leaves the cache path, and below the op offload batch size its host experts
++        // are computed on the CPU, which rounds differently from the GPU, so the output would depend on the cache size.
++        const int64_t n_tokens_max = std::min<int64_t>(n_ubatch, max_batch);
++        std::vector<size_t> dev_budget(devices.size(), 0);
++        std::vector<size_t> dev_floor (devices.size(), 0);
++        for (size_t id = 0; id < devices.size(); ++id) {
++            dev_budget[id] = (size_t) ((double) size*devices[id].split/split_sum);
++        }
++        for (group & g : groups) {
++            g.n_floor = (int32_t) std::min<int64_t>(n_tokens_max*n_expert_used, g.ref[0]->ne[2]);
++            dev_floor[g.id] += alloc_size(g, g.n_floor);
++        }
++        for (size_t id = 0; id < devices.size(); ++id) {
++            const device & d = devices[id];
++            if (d.host_bytes > 0 && dev_floor[id] > dev_budget[id]) {
++                // refuse rather than run a group off the cache path: in exact mode no expert may be computed on the CPU
++                const double min_mib = d.split > 0.0 ? std::ceil((double) dev_floor[id]*split_sum/d.split/1024.0/1024.0) : -1.0;
++                throw std::runtime_error(format("MoE cache: %.0f MiB on %s is below the exact-mode floor of %.0f MiB "
++                    "(slots for one ubatch of %lld tokens in every group of layers); use --moe-cache-mib %.0f or more, or a smaller --ubatch-size",
++                    dev_budget[id]/1024.0/1024.0, ggml_backend_buft_name(d.buft), dev_floor[id]/1024.0/1024.0, (long long) n_tokens_max, min_mib));
++            }
++        }
++
++        // within a device the budget is split by the size of the experts, so each group caches the same fraction of its experts;
++        // a group whose share is below its floor gets the floor and the other groups split the rest (unchanged when no floor binds)
++        auto slots_for = [&](const group & g, size_t budget) {
++            const int32_t max_slots = (int32_t) (g.layers.size()*g.ref[0]->ne[2]);
++            int32_t n = 0;
++            while (n < max_slots && alloc_size(g, n + 1) <= budget) {
++                n++;
++            }
++            return n;
++        };
++        std::vector<size_t> share(groups.size(), 0);
++        for (bool changed = true; changed; ) {
++            changed = false;
++            std::vector<size_t> rest_budget = dev_budget;
++            std::vector<size_t> rest_bytes(devices.size(), 0);
++            for (const group & g : groups) {
++                if (g.at_floor) {
++                    rest_budget[g.id] -= alloc_size(g, g.n_floor); // the floors fit, checked above
++                } else {
++                    rest_bytes[g.id] += g.host_bytes;
++                }
++            }
++            for (size_t ig = 0; ig < groups.size(); ++ig) {
++                group & g = groups[ig];
++                if (g.at_floor) {
++                    continue;
++                }
++                share[ig] = (size_t) ((double) rest_budget[g.id]*g.host_bytes/rest_bytes[g.id]);
++                if (slots_for(g, share[ig]) < g.n_floor) {
++                    g.at_floor = true;
++                    changed    = true;
++                }
++            }
++        }
++
+         std::vector<size_t> n_tensors(devices.size(), 0);
+         size_t n_tensors_host = 0;
+-        for (group & g : groups) {
+-            const device & d = devices[g.id];
+-            const int32_t n_expert  = g.ref[0]->ne[2];
+-            const size_t  budget    = (size_t) ((double) size*d.split/split_sum*g.host_bytes/d.host_bytes);
+-            const int32_t max_slots = g.layers.size()*n_expert;
+-            while (g.n_slots < max_slots && alloc_size(g, g.n_slots + 1) <= budget) {
+-                g.n_slots++;
+-            }
+-            if (g.n_slots < n_expert_used) {
+-                LLAMA_LOG_WARN("%s: MoE cache budget is too small for %zu layers, they are not cached\n", __func__, g.layers.size());
+-                g.n_slots = 0;
+-                continue;
++        for (size_t ig = 0; ig < groups.size(); ++ig) {
++            group & g = groups[ig];
++            const int32_t n_expert = g.ref[0]->ne[2];
++            g.n_slots = g.at_floor ? g.n_floor : slots_for(g, share[ig]);
++            GGML_ASSERT(g.n_slots >= g.n_floor && g.n_floor >= n_expert_used);
++            if (g.at_floor) {
++                LLAMA_LOG_WARN("%s: %zu layers of %s experts held at the exact-mode floor of %d slots (ubatches up to %lld tokens), their share by size was smaller\n",
++                    __func__, g.layers.size(), ggml_type_name(g.ref[0]->type), g.n_floor, (long long) n_tokens_max);
+             }
+             g.slru.init(model.layers.size(), n_expert, g.n_slots);
+             n_tensors[g.id] += g.ref.size()*(1 + g.layers.size());
+@@ -503,11 +562,17 @@ struct llama_moe_cache::impl {
+                 ggml_backend_buft_name(d.buft), d.buf_size/1024.0/1024.0, d.host_bytes/1024.0/1024.0);
+             for (const group & g : groups) {
+                 if (g.id == (int32_t) id) {
+-                    LLAMA_LOG_INFO("%s: %2zu layers, %s: %5d slots (%.1f%%)\n", __func__,
+-                        g.layers.size(), ggml_type_name(g.ref.back()->type), g.n_slots, 100.0*g.n_slots/(g.layers.size()*g.ref[0]->ne[2]));
++                    LLAMA_LOG_INFO("%s: %2zu layers, %s: %5d slots (%.1f%%), %8.2f MiB, floor %d slots%s\n", __func__,
++                        g.layers.size(), ggml_type_name(g.ref[0]->type), g.n_slots, 100.0*g.n_slots/(g.layers.size()*g.ref[0]->ne[2]),
++                        alloc_size(g, g.n_slots)/1024.0/1024.0, g.n_floor, g.at_floor ? " (held at the floor)" : "");
+                 }
+             }
+         }
++        if (!op_offload) {
++            // the selective copy of large ubatches needs op offload, without it their host experts are computed on the CPU (C-10)
++            LLAMA_LOG_WARN("%s: op offload is off, ubatches above %lld tokens compute their host experts on the CPU, not exact mode\n",
++                __func__, (long long) max_batch);
++        }
+     }
+ 
+     ggml_backend_t backend(int32_t il) const {
+@@ -680,8 +745,9 @@ struct llama_moe_cache::impl {
+     }
+ };
+ 
+-llama_moe_cache::llama_moe_cache(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size) :
+-    pimpl(new impl(model, backends, bufts, size)) {
++llama_moe_cache::llama_moe_cache(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size,
++        uint32_t n_ubatch, bool op_offload) :
++    pimpl(new impl(model, backends, bufts, size, n_ubatch, op_offload)) {
+ }
+ 
+ llama_moe_cache::~llama_moe_cache() = default;
+diff --git a/src/llama-moe-cache.h b/src/llama-moe-cache.h
+index 1b59c0f2..5edb51be 100644
+--- a/src/llama-moe-cache.h
++++ b/src/llama-moe-cache.h
+@@ -16,7 +16,10 @@ struct llama_model;
+ class llama_moe_cache {
+ public:
+     // backends are all the backends of the context, each GPU gets its own cache of the given size for the layers assigned to it
+-    llama_moe_cache(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size);
++    // every group of layers gets at least the slots for one ubatch of min(n_ubatch, 32) tokens (Marian M1.1, exact mode),
++    // the constructor throws if the size cannot cover these floors
++    llama_moe_cache(const llama_model & model, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size,
++            uint32_t n_ubatch, bool op_offload);
+     ~llama_moe_cache();
+ 
+     // the device that caches layer il
+-- 
+2.45.1.windows.1
+

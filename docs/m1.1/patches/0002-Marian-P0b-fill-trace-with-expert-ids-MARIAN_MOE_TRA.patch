@@ -1,0 +1,104 @@
+From 1a5fcba7a3070882e5ab62ff597a8c4e5a878a52 Mon Sep 17 00:00:00 2001
+From: tylnexttime <tylnexttime@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 07:49:21 +1100
+Subject: [PATCH 2/3] Marian P0b: fill trace with expert ids
+ (MARIAN_MOE_TRACE_FILLS)
+
+The P0 trace (MARIAN_MOE_TRACE) records per slot-map lookup how many experts
+were uploaded and their bytes, not which experts, so a replay of a run's miss
+sequence had to invent the ids. When MARIAN_MOE_TRACE_FILLS names a file, each
+lookup now also writes one line per uploaded expert:
+
+  kind,t_us,layer,n_ids,expert,slot,src,bytes
+  F,<t_us of the lookup's S line>,<layer>,<selections>,<expert>,<slot>,m,<bytes>
+
+t_us and layer match the lookup's S line in MARIAN_MOE_TRACE, so
+tools/replay_probe.exe --fills joins the two exactly. src is 'm' (the host
+tensor, upstream's path); the P3 commit adds t / a / r. It is a separate file
+so the P0 CSV and analyse_m10.py are unchanged. Off unless the variable is set.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/llama-moe-cache.cpp | 39 ++++++++++++++++++++++++++++++++++++++-
+ src/llama-moe-cache.h   |  4 ++++
+ 2 files changed, 42 insertions(+), 1 deletion(-)
+
+diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
+index dcbe5070..35681276 100644
+--- a/src/llama-moe-cache.cpp
++++ b/src/llama-moe-cache.cpp
+@@ -32,6 +32,25 @@ FILE * llama_moe_trace_file() {
+     return f;
+ }
+ 
++FILE * llama_moe_trace_fills_file() {
++    static FILE * f = [] () -> FILE * {
++        const char * path = std::getenv("MARIAN_MOE_TRACE_FILLS");
++        if (path == nullptr || path[0] == '\0') {
++            return nullptr;
++        }
++        FILE * res = std::fopen(path, "w");
++        if (res != nullptr) {
++            std::setvbuf(res, nullptr, _IOFBF, 1 << 20);
++            // F: one expert uploaded by a slot-map lookup; t_us and layer match the lookup's S line in MARIAN_MOE_TRACE
++            // src: m = host tensor (upstream), t = pinned tier, a = read and admitted into the tier, r = read through the ring
++            std::fprintf(res, "kind,t_us,layer,n_ids,expert,slot,src,bytes\n");
++            std::atexit([] () { std::fflush(llama_moe_trace_fills_file()); });
++        }
++        return res;
++    }();
++    return f;
++}
++
+ int64_t llama_moe_trace_us() {
+     return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+ }
+@@ -670,7 +689,8 @@ struct llama_moe_cache::impl {
+         GGML_ASSERT(ggml_is_contiguous(sel));
+ 
+         FILE * trace = llama_moe_trace_file();
+-        const int64_t t0 = trace ? llama_moe_trace_us() : 0;
++        FILE * trace_fills = llama_moe_trace_fills_file();
++        const int64_t t0 = trace || trace_fills ? llama_moe_trace_us() : 0;
+ 
+         ids.resize(ggml_nelements(sel));
+         ggml_backend_tensor_get_async(backend, sel, ids.data(), 0, ggml_nbytes(sel));
+@@ -712,6 +732,23 @@ struct llama_moe_cache::impl {
+         st.misses += fills.size();
+         st.bytes  += bytes;
+ 
++        if (trace_fills) {
++            // which experts were uploaded, so a replay can use real ids (Marian M1.1)
++            size_t expert_bytes = 0;
++            for (const ggml_tensor * w : l.experts) {
++                expert_bytes += w->nb[2];
++            }
++            for (const auto & f : fills) {
++                std::fprintf(trace_fills, "F,%lld,%d,%zu,%d,%d,m,%zu\n", (long long) t0, il, ids.size(), f.expert, f.slot, expert_bytes);
++            }
++            static size_t n_fill_lines = 0;
++            n_fill_lines += fills.size();
++            if (n_fill_lines >= 4096) {
++                n_fill_lines = 0;
++                std::fflush(trace_fills); // servers are usually killed, so do not rely on the atexit flush
++            }
++        }
++
+         // the next copy synchronizes the backend before it changes the slot map again
+         ggml_backend_tensor_set_async(backend, dst, src->data, 0, ggml_nbytes(src));
+ 
+diff --git a/src/llama-moe-cache.h b/src/llama-moe-cache.h
+index 5edb51be..f559d2e6 100644
+--- a/src/llama-moe-cache.h
++++ b/src/llama-moe-cache.h
+@@ -51,3 +51,7 @@ using llama_moe_cache_ptr = std::unique_ptr<llama_moe_cache>;
+ // variable MARIAN_MOE_TRACE names a file; nullptr otherwise. llama_moe_trace_us is a steady clock in microseconds.
+ FILE *  llama_moe_trace_file();
+ int64_t llama_moe_trace_us();
++
++// Marian M1.1 fill trace: one CSV line per expert uploaded by a slot-map lookup (expert id, slot, source), written only
++// when MARIAN_MOE_TRACE_FILLS names a file; the lines carry the t_us and layer of the lookup's S line
++FILE *  llama_moe_trace_fills_file();
+-- 
+2.45.1.windows.1
+
