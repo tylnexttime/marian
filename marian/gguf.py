@@ -55,6 +55,33 @@ def metadata(path: str | Path, keep_arrays: bool = False) -> dict:
     return meta
 
 
+def tensor_infos(path: str | Path) -> tuple[dict, list[dict], int]:
+    """The header and tensor directory of one GGUF file (or shard): metadata, tensors, and the file offset of the data.
+
+    Each tensor: name, ne (dims, innermost first), type (ggml type id), offset (from the start of the data section).
+    Only the header is read, so a partial download of a file's first bytes is enough."""
+    with open(path, "rb") as f:
+        if f.read(4) != b"GGUF":
+            raise ValueError(f"{path} is not a GGUF file")
+        version = _read(f, "<I")
+        n_tensors, n_kv = _read(f, "<Q"), _read(f, "<Q")
+        meta = {"gguf.version": version, "gguf.tensor_count": n_tensors}
+        for _ in range(n_kv):
+            key = _string(f)
+            meta[key] = _value(f, _read(f, "<I"), False)
+        tensors = []
+        for _ in range(n_tensors):
+            name = _string(f)
+            n_dims = _read(f, "<I")
+            if n_dims > 8:
+                raise ValueError(f"implausible tensor rank {n_dims} in {path}")
+            ne = [_read(f, "<Q") for _ in range(n_dims)]
+            tensors.append({"name": name, "ne": ne, "type": _read(f, "<I"), "offset": _read(f, "<Q")})
+        align = int(meta.get("general.alignment", 32) or 32)
+        data_offset = (f.tell() + align - 1) // align * align
+    return meta, tensors, data_offset
+
+
 def summary(path: str | Path) -> dict:
     """What Marian needs: architecture, block count, expert counts, trained context, MoE or dense."""
     m = metadata(path)

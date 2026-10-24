@@ -1,0 +1,1604 @@
+{
+ "model": "Swift Flash Next",
+ "n_expert_used": 10,
+ "source": {
+  "gguf": [
+   "Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00001-of-00002.gguf",
+   "Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00002-of-00002.gguf"
+  ],
+  "repo": "ukisai/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-GGUF",
+  "revision": "99bb8f7f95c7aa7b24a36a7786a4f657b30f5d3d",
+  "sha256": [
+   "ca3b302d3d1eb6eddce3ea4acc79854e6cc5fdc0583e374a6a8b6bb67327743b",
+   "e4996a6de18fd49c58d9a0040fcfd73787db6407c51973f29884bee7b14c9dbb"
+  ],
+  "read": "tensor directories from the first 32 MiB of each shard (HTTP range), 24/10/2026",
+  "architecture": "qwen4exp"
+ },
+ "layers": [
+  {
+   "layer": 0,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 1,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "up",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 2,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 3,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 4,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "up",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 5,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 6,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 7,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 8,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq1_m",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 358400
+    },
+    {
+     "role": "up",
+     "type": "iq1_m",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 358400
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 9,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "up",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 10,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "up",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 11,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "up",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 12,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 13,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq1_m",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 358400
+    },
+    {
+     "role": "up",
+     "type": "iq1_m",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 358400
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 14,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "up",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 15,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 16,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 17,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 18,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "up",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 19,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "up",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 20,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 21,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 22,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 23,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 24,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 25,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 26,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 27,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "up",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 28,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 29,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "up",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 30,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "up",
+     "type": "iq2_xxs",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 422400
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 31,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 32,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 33,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 34,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 35,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 36,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 37,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq1_m",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 358400
+    },
+    {
+     "role": "up",
+     "type": "iq1_m",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 358400
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 38,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 39,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 40,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 41,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 42,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 43,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 44,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 45,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 46,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  },
+  {
+   "layer": 47,
+   "n_expert": 512,
+   "tensors": [
+    {
+     "role": "gate",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "up",
+     "type": "iq2_s",
+     "ne": [
+      2560,
+      640
+     ],
+     "nb2": 524800
+    },
+    {
+     "role": "down",
+     "type": "q2_0",
+     "ne": [
+      640,
+      2560
+     ],
+     "nb2": 460800
+    }
+   ]
+  }
+ ]
+}
