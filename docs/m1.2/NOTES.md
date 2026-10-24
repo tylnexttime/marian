@@ -212,10 +212,13 @@ git -C <repo> fetch origin m1.2/replay
 git -C <repo> worktree add <repo> origin/m1.2/replay
 git -C <research>\llama.cpp worktree add -b marian/m1.2 <research>\llama.cpp-m1.2 marian/m1.1
 git -C <research>\llama.cpp-m1.2 am <repo>\docs\m1.2\patches\0004-Marian-P1-routing-id-trace-of-every-MoE-layer-step-M.patch
+git -C <research>\llama.cpp-m1.2 am <repo>\docs\m1.2\patches\0005-Marian-P1-review-fixes-S-record-head-and-writer-guards.patch
 git -C <research>\llama.cpp-m1.2 log --oneline -5
 ```
 
-The log must show the 0004 commit on top of `ebdf01e8`.
+The log must show the 0004 commit and the 0005 review fixes on top of `ebdf01e8`. **Use absolute paths for the
+worktree:** with `git -C <research>\llama.cpp`, a relative worktree path is resolved inside the fork (this happened
+once on 24/10). **0005 is required:** without it the S records are mis-headed (section 10).
 
 **5.2 Build (CPU, about 15 minutes; GPU-BUSY absent, and not during CPU- or GPU-timed runs):**
 
@@ -348,3 +351,37 @@ python3 -m unittest discover -s tests
 | `test-tokenizers-ggml-vocabs` | failed in 1 s | not re-run | its vocab repo was cloned without git-lfs, so every `.gguf` is an LFS pointer ("invalid magic characters: 'vers'"); an environment gap, untouched by any Marian patch |
 | `test-barrier` | timeout 300 s | **passed, 1 s** | a ggml thread-barrier test starved by 8 jobs on 4 vCPUs; 0004 changes no ggml file |
 | `test-llama-context` | timeout 300 s | **passed, 20 s** | the same contention; it creates and frees many contexts, so it also runs 0004's flush in `~llama_context` |
+
+## 10. The GPU run (24/10/2026, on the reference laptop)
+
+**Review before the run.** An independent review of 0004 found one blocker for the data (not for exactness): the S
+record took `k` and `n_tokens` from `sel`, which `build_moe_cache_slots` has already reshaped to 1-D, so every
+multi-token S step was written as `n_tokens = 1, k = n_tokens * 10`. Single-token decode was unaffected, which is why
+the size estimate and the unit test passed. A 28-token step (present in this arm's trace) would have made the reader
+lose its place and cut decode prompts 5, 7 and 9 from the test set. Patch 0005 takes `k` from the reshape's source,
+refuses any head that would misstate its payload, stops writing after a failed write (the file stays a clean prefix),
+bounds the buffer if the writer stalls, and converts the path with the ANSI code page. On the Python side the reader
+now refuses a record whose kind is not S/L or whose `k` differs from the model's `n_expert_used`; two tests feed it
+the bad head. Lesson: the unit test exercised the writer, not the hook's arguments, so it could not have caught this.
+
+**Acceptance checks (section 5.5):**
+
+| Check | Result |
+|---|---|
+| 1. output identity, i1 (trace on) vs e1-c9400 (trace off) | **10/10 texts, 10/10 top-3** |
+| 2. geometry of the laptop's shards | **identical** to `swift-1.5-iq2_xs.geometry.json` |
+| 3. replay = server | S lines **107,008 / 107,008** identical; fill steps **58,110 / 58,110**; median hit replay minus server **+0.00** points (M1.1's exit check) |
+| 4. trace size and health | 4.10 MB, 107,221 records, 0 truncated bytes, `k = 10` in every record, the 28-token step read correctly, no "trace is off" WARN |
+| 5. speed vs e1 | **outside the band:** 6.6 vs 7.8 tok/s median (-15%); started with 4.5 GiB less free RAM (the page cache held other data) and 15 ms/token more host fetch; attributed to page-cache state, not isolated |
+
+**The P3 question (section 5.6), answered on the real trace** (`i1-c9400.replay.md`, test prompts, budget 9,400 MiB):
+no realistic tier policy reaches 75% of decode miss bytes within 16 GiB (current 56.9%, warm 59.4%, static-miss
+61.7% at 16 GiB; 21-27% at 6 GiB); only `oracle-static` reaches 75%, at 16 GiB. On a 32 GB machine a bigger or
+smarter tier is not the lever. The P2 candidates are all below SLRU at the same budget (-2.1 to -11.5 median points).
+
+**Where the post-prefill time went** (per-phase split of the M1.1 P3 traces): after a 16K prompt the VRAM hit rate
+barely changes (90.8% to 89.0%) and miss bytes rise 22%, but memory-mapped misses take twice the host time (page-cache
+eviction by the prompt). The ring and the tier make miss cost nearly independent of the page cache (host +12-30%),
+which is why P3 lifts post-prefill decode most. With the corrected analysis (requests that stop within 8 tokens no
+longer count as 0 tok/s), the 6 GiB tier measured 14.0-14.7 tok/s warm and 14.4-14.8 post-prefill (median; 13.2-14.2
+all-tokens) on two rounds; the design-9.3 five-round confirmation is the next entry in `docs/JOURNEY.md`.
