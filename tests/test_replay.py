@@ -57,6 +57,32 @@ class IdsFormat(unittest.TestCase):
         self.assertEqual(struct.calcsize("<BBHIq"), 16)
         self.assertEqual(2400 * 48 * (16 + 2 * 10), 4_147_200)
 
+    def test_swapped_head_of_the_first_writer_is_refused(self):
+        # the first 0004 wrote a 2-token S step as n_tokens=1, k=20 (the ids reach the cache as a 1-D reshape);
+        # with the model's k the reader must refuse it, and check_heads must flag it against the S line
+        bad = [Step("S", 100, 0, 1, 20, array("H", range(20)))]
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "bad.ids.bin"
+            idstrace.write_ids(p, bad)
+            with self.assertRaises(ValueError):
+                idstrace.read_ids(p, expected_k=10)
+            tr = idstrace.read_ids(p)                       # readable without the model's k ...
+            ok, joined, msgs = idstrace.check_heads(tr, [{"kind": "S", "t_us": 100, "layer": 0, "n_ids": 20}])
+            self.assertEqual((ok, joined), (1, 1))          # ... and n_tokens*k still equals n_ids, so the k check is the one that bites
+            good = [Step("S", 100, 0, 2, 10, array("H", range(20)))]
+            idstrace.write_ids(p, good)
+            self.assertEqual(len(idstrace.read_ids(p, expected_k=10).steps), 1)
+            ok, joined, msgs = idstrace.check_heads(idstrace.read_ids(p), [{"kind": "S", "t_us": 100, "layer": 0, "n_ids": 30}])
+            self.assertEqual((ok, joined, len(msgs)), (0, 1, 1))
+
+    def test_a_kind_that_is_not_s_or_l_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "k.ids.bin"
+            idstrace.write_ids(p, [Step("S", 1, 0, 1, 2, array("H", [1, 2]))])
+            b = bytearray(p.read_bytes()); b[32] = ord("X"); p.write_bytes(bytes(b))
+            with self.assertRaises(ValueError):
+                idstrace.read_ids(p)
+
     def test_not_an_ids_trace(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "x.bin"

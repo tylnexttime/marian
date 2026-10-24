@@ -45,7 +45,10 @@ class Trace:
     requests: list[dict] = field(default_factory=list)
 
 
-def read_ids(path: str | Path) -> Trace:
+def read_ids(path: str | Path, expected_k: int | None = None) -> Trace:
+    """Read an ids trace. Strict: a record whose kind is not S/L, or whose k differs from expected_k (the model's
+    n_expert_used, when given), raises instead of being read, because a wrong head puts every later record out of
+    step (found by review on 24/10/2026: S records were written with n_tokens and k swapped)."""
     data = Path(path).read_bytes()
     if len(data) < _HEAD.size:
         raise ValueError(f"{path}: shorter than the ids-trace header")
@@ -57,6 +60,11 @@ def read_ids(path: str | Path) -> Trace:
     steps, pos, n = [], header_bytes, len(data)
     while pos + _REC.size <= n:
         kind, k, layer, n_tokens, t_us = _REC.unpack_from(data, pos)
+        if kind not in (0x53, 0x4C):
+            raise ValueError(f"{path}: record at byte {pos} has kind {kind:#x}, not 'S' or 'L' (corrupt or mis-headed)")
+        if expected_k is not None and k != expected_k:
+            raise ValueError(f"{path}: record at byte {pos} ({chr(kind)}, layer {layer}, t_us {t_us}) has k={k}, "
+                             f"n_tokens={n_tokens}; the model routes {expected_k} experts per token")
         end = pos + _REC.size + 2 * k * n_tokens
         if end > n:
             break
@@ -69,6 +77,23 @@ def read_ids(path: str | Path) -> Trace:
         steps.append(Step(chr(kind), t_us, layer, n_tokens, k, ids))
         pos = end
     return Trace(steps, t_open, n - pos)
+
+
+def check_heads(trace: Trace, csv_rows: list[dict]) -> tuple[int, int, list[str]]:
+    """Each S record's n_tokens*k must equal the n_ids of the P0 S line it joins on (t_us, layer). Returns
+    (agreeing, joined, first few disagreements). S records with no S line (cut by a kill) are not counted."""
+    lines = {(r["t_us"], r["layer"]): r["n_ids"] for r in csv_rows if r.get("kind") == "S"}
+    ok = joined = 0
+    bad = []
+    for s in trace.steps:
+        if s.kind != "S" or (s.t_us, s.layer) not in lines:
+            continue
+        joined += 1
+        if s.n_tokens * s.k == lines[(s.t_us, s.layer)]:
+            ok += 1
+        elif len(bad) < 5:
+            bad.append(f"t_us {s.t_us} layer {s.layer}: record {s.n_tokens}x{s.k}, S line n_ids {lines[(s.t_us, s.layer)]}")
+    return ok, joined, bad
 
 
 def write_ids(path: str | Path, steps: list[Step], t_open_us: int = 0) -> None:

@@ -116,12 +116,20 @@ def _num(x: str):
 
 def _replay(a) -> int:
     geom = geometry.load(a.geometry) if a.geometry else geometry.from_gguf(a.gguf)
-    trace = idstrace.read_ids(a.ids)
+    trace = idstrace.read_ids(a.ids, expected_k=geom.n_expert_used)
     if a.requests:
         idstrace.assign_requests(trace, idstrace.read_requests(a.requests))
     else:
         idstrace.infer_requests(trace)
     csv_rows = idstrace.read_csv(a.trace) if a.trace else None
+    if csv_rows is not None:
+        ok, joined, bad = idstrace.check_heads(trace, csv_rows)
+        print(f"record heads: {ok} of {joined} S records agree with their S line on n_tokens x k", file=sys.stderr)
+        if ok != joined:
+            for b in bad:
+                print(f"  {b}", file=sys.stderr)
+            print("refusing to replay a trace whose record heads disagree with the server's own trace", file=sys.stderr)
+            return 2
     fill_rows = idstrace.read_csv(a.fills) if a.fills else None
     split = lambda x: [y for y in x.split(",") if y]                                    # noqa: E731
     reps, md = [], []
