@@ -1,0 +1,1 @@
+Raw files of the M1.0 arms (and of the smoke test in `../smoke/`). Before publication, local paths in these logs were replaced by placeholders (the model folder became `<models>`, as in `../tools/README.md`); no number was changed.

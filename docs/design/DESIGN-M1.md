@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| Version | **v2**, 22/10/2026: v1 plus the foreign critique's 24 items folded in (section 14 lists every change) |
-| Author | Claude Tyl (Claude Tyl, the reference laptop), for Chris |
+| Version | **v2**, 22/10/2026: v1 plus the external critique's 24 items folded in (section 14 lists every change) |
+| Author | Claude Tyl, for Chris |
 | Decisions it implements | Chris, 22/10/2026: thin fork on the latest llama.cpp; exact by default, answer-changing speed-ups opt-in and measured blind; built here; self-calibrating to any machine |
 | Upstream pin | llama.cpp `a37cc46104eb50900d5ab4a9ba02a0abdac039db` (21/10/2026, master) |
 | Evidence | `RESEARCH-PACK.md` (Sol, cited, plus my addendum on expert bytes); the three idea files in `ideas/` |
@@ -51,7 +51,7 @@ median uses MTP, route-tail skip and a CPU/GPU split, so it is not an exact-mode
 of about 100-125 tok/s on this GPU (3.6 GiB of weights per token at 450-500 GB/s) [CT, FB]. Upstream's SLRU baseline
 is unmeasured; Fable guesses 20-28 tok/s [FB]. M1.0 replaces all of these guesses with numbers.
 
-**Reference laptop** (measurement only, never tuning): the reference laptop, RTX 4090 Laptop 16 GB (16,376 MiB), i7-13700HX AVX2,
+**Reference laptop** (measurement only, never tuning): RTX 4090 Laptop 16 GB (16,376 MiB), i7-13700HX AVX2,
 32 GB DDR5-4800, Windows 11, model on the E: NVMe. RAM upgrade approved 22/10; after it, the 32 GB profile is kept as a
 separate machine class.
 
@@ -445,14 +445,14 @@ share, route-tail skip and the blind-KL method. Upstream llama.cpp (MIT): the ca
 the research pack. Astra and Fable: the ideas tagged [AS] and [FB]. Every borrowed file keeps its MIT notice in
 `NOTICE.md`.
 
-## 14. What changed from v1 to v2 (the foreign critique)
+## 14. What changed from v1 to v2 (the external critique)
 
-Critique: `critique/CRITIQUE-M1-v1.md` (+ `.json`, `.yaml`), critique harness v3.2 on 22/10/2026, critics
+Critique: `critique/CRITIQUE-M1-v1.md` (+ `.json`, `.yaml`), our critique harness (v3.2) on 22/10/2026, critics
 Sol (correctness), Luna (correctness, max) and Astra (operations); the brief asked for performance improvements as
 well as defects. Run stamp: v1 `DESIGN-M1.md` sha256 `3a27a5a4...`. 24 items, **0 refuted**, 13 survived the refuter, 3
 "unverifiable" (the refuter's manifest said it had not opened `DESIGN-M1.md`, a solution file it was given: an
 apparatus quirk, so I decided those three by hand). The refuters were all one model family (OpenAI GPT); no Claude-side
-twin was run (the Max plan's weekly window is at 85%).
+twin was run (usage limits).
 
 | # | Item | Editor's action | What v2 does | Where |
 |---|---|---|---|---|
