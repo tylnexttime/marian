@@ -47,8 +47,8 @@ These are why a measuring tool matters. Sources and conditions for every figure 
   SSD (measured at 0.41 GB/s, against 6.6 GB/s from resident RAM and 10.3 GB/s from pinned RAM).
 - **Headline: Marian's exact RAM tier roughly doubles decode against upstream's cache.** M1.1's miss source (an
   unbuffered staging ring plus a pinned RAM tier) takes the larger Qwen3.8-Flash-Next model on the 16 GB reference
-  laptop from **7.1 / 6.1 tok/s** on upstream's path to **14.2 / 13.8 tok/s** with a 6 GiB pinned tier (two rounds,
-  indicative), with identical answers (10/10). The price: **prefill about 3x slower**, because prefill still reads
+  laptop from **7.3 / 6.3 tok/s** on upstream's path to **14.7 / 14.0 tok/s** with a 6 GiB pinned tier (median per
+  request, rounds 1 / 2; two rounds, indicative), with identical answers (10/10). The price: **prefill about 3x slower**, because prefill still reads
   through the memory map and the pinned tier takes the page cache it needs (see Limitations).
 - **The practical question we were asked** (can that 8 GB / 32 GB laptop, with most of its RAM in use, run a 4-30B
   model at 20 to 30 tok/s?) **was answered yes by stock llama.cpp with good offload settings, not by Marian's cache**:
@@ -159,8 +159,12 @@ Be warned; this is research code.
   ring costs less (16K: 105-110). This is why neither is a default.
 - **The pinned tier competes with the desktop.** It takes RAM the OS and other programs cannot page; pinning can fail
   (it then falls back to pageable memory and says so).
-- **The M1 decode target is not met.** M1's exit asks for at least 12 tok/s on the reference laptop both warm and
-  right after a 16K prompt. The tier arm reaches 13.8-14.2 warm but 10.3-10.9 after the long prompt.
+- **The M1 decode target is not yet confirmed.** M1's exit asks for at least 12 tok/s on the reference laptop both
+  warm and right after a 16K prompt. On the corrected figures (requests that stop within 8 tokens left out) the 6 GiB
+  tier arm is above 12 tok/s in both states in both rounds: 14.7 / 14.0 warm and 14.8 / 14.4 after a 16K prompt
+  (median per request; the all-tokens rates are 13.2 to 14.2). That is two rounds, and the design (section 9.3)
+  needs five, so it is not a claim yet. A five-round confirmation is running
+  ([JOURNEY A21](docs/JOURNEY.md#a21-the-five-round-confirmation)).
 - **Exactness is proved at token level, not yet bitwise.** Answers are identical across cache budgets and miss sources
   (10/10 greedy texts and top-3 probabilities). Against the true reference, every expert in VRAM, Gemma 4 26B-A4B's
   cache arms (old and new build, memory-mapped and ring miss sources) match on 1,280 of 1,280 generated tokens and on
@@ -184,7 +188,7 @@ Be warned; this is research code.
 |---|---|---|
 | M0 | done, 21/10/2026 | profiler, planner, launcher; first measured profile in `profiles/` |
 | M1.0 | measured, 22-24/10/2026 | upstream cache vs stock on Swift 1.5 IQ2_XS; copy probe; 8 GB floor arms; gate and control models |
-| M1.1 | in progress | exactness floor PASS; trace-replay probe GO; P3 verify run PASS (11/11); P3 server arms measured 24/10/2026 (two rounds): the tier doubles decode, exact, but costs prefill about 3x; remaining controls still running |
+| M1.1 | in progress | exactness floor PASS; trace-replay probe GO; P3 verify run PASS (11/11); P3 server arms measured 24/10/2026 (two rounds): the tier doubles decode, exact, but costs prefill about 3x; controls and the Maya drive test done; replay = server exactly (+0.00 points, the M1.1 exit check); five-round confirmation of the decode exit running |
 | M1.2 onwards | not started | ranked policy, calibration, real-hardware validation (see [DESIGN-M1 section 10](docs/design/DESIGN-M1.md)) |
 
 **M1 exit criteria, and where each stands** (reference laptop, Swift 1.5 IQ2_XS):
@@ -193,8 +197,8 @@ Be warned; this is research code.
 |---|---|---|
 | VRAM lookup hit rate, median per decode token | at least 85% | **met** at a 9,400 MiB cache: 90.8% (10th percentile 80.4%), with upstream's SLRU |
 | Exactness | answers independent of placement | **met across budgets and miss sources** after the exactness floor (10/10); harness and parity matrix not built |
-| Decode, warm | at least 12 tok/s | **met** by the P3 tier arm, two rounds (indicative): 14.2 / 13.8 tok/s (upstream's path 6.1-7.5; stock 10.6-10.9 in the first campaign, 8.2 / 10.4 in the P3 campaign) |
-| Decode after a 16K prompt | at least 12 tok/s | **not met**: P3 tier 10.9 / 10.3 tok/s (upstream's path 3.3-3.5; stock 3.7-5.1) |
+| Decode, warm | at least 12 tok/s | **above 12 in both rounds, not yet confirmed** (design 9.3 needs five rounds; a five-round confirmation is running, JOURNEY A21): P3 tier 14.7 / 14.0 tok/s (upstream's path 7.3 / 6.3; stock 10.6 / 10.9 in the first campaign, 8.6 / 11.0 in the P3 campaign) |
+| Decode after a 16K prompt | at least 12 tok/s | **above 12 in both rounds, not yet confirmed** (same two rounds; the five-round confirmation is running): P3 tier 14.8 / 14.4 tok/s (upstream's path 5.0 / 4.6; stock 5.3 / 5.1 in the first campaign, 4.2 / 3.8 in the P3 campaign) |
 
 ## Measured results (short)
 
@@ -210,14 +214,15 @@ Gemma 4 26B-A4B-it, GPU limited to 8 GB on the reference laptop (decode tok/s, m
 | about 25 GB in use | stock `-ncmoe 18` (IQ3_XXS) | **26.3** | 775.4 |
 | reference, whole 16 GB GPU | all experts on GPU (IQ4_XS) | 79.4 | 3,645.7 |
 
-Swift 1.5 IQ2_XS (a quantisation of Qwen3.8-Flash-Next, 33 GiB of experts) on the 16 GB reference laptop, two rounds:
+Swift 1.5 IQ2_XS (a quantisation of Qwen3.8-Flash-Next, 33 GiB of experts) on the 16 GB reference laptop, two rounds
+(tok/s, median per request, round 1 / round 2; requests that stop within 8 tokens are left out):
 
 | Configuration | Decode | Decode after a 16K prompt | Prefill, 16K prompt |
 |---|---|---|---|
-| stock `-ncmoe 34` (first campaign) | 10.6 / 10.9 | 5.1 / 4.7 | 152.0 / 147.9 |
-| upstream cache 9,400 MiB, memory-mapped misses | 7.1 / 6.1 | 3.5 / 3.3 | 119.3 / 112.0 |
-| + P3 ring | 11.7 / 11.5 | 7.6 / 8.4 | 105.0 / 109.9 |
-| + P3 6 GiB pinned tier | 14.2 / 13.8 | 10.9 / 10.3 | 34.0 / 35.8 |
+| stock `-ncmoe 34` (first campaign) | 10.6 / 10.9 | 5.3 / 5.1 | 152.0 / 147.9 |
+| upstream cache 9,400 MiB, memory-mapped misses | 7.3 / 6.3 | 5.0 / 4.6 | 119.3 / 112.0 |
+| + P3 ring | 12.4 / 12.0 | 10.7 / 11.7 | 105.0 / 109.9 |
+| + P3 6 GiB pinned tier | 14.7 / 14.0 | 14.8 / 14.4 | 34.0 / 35.8 |
 
 Everything else, with conditions and what each table taught us: [docs/JOURNEY.md](docs/JOURNEY.md).
 
