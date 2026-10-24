@@ -1,0 +1,14 @@
+Marian
+Copyright 2026 tylnexttime (Chris Tyl and Claude Tyl) and contributors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This project patches llama.cpp and ggml (https://github.com/ggml-org/llama.cpp),
+Copyright (c) The ggml authors, licensed under the MIT License. The patch
+files under docs/*/patches/ modify that upstream code; the upstream code they touch
+remains under its MIT License, and our changes in them are offered under both the
+MIT License and Apache-2.0, so they can be contributed upstream.
+
+Ideas credited to Strata (https://github.com/Niko1221/Strata) and Project Maya
+(https://github.com/mw00/project-maya), both MIT, are reimplemented, not copied; any
+file that does include their code keeps its original MIT notice.

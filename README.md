@@ -254,4 +254,6 @@ From [DESIGN-M1 section 10](docs/design/DESIGN-M1.md), reshaped by what M1.0 mea
 
 ## Licence
 
-MIT (see [LICENSE](LICENSE)).
+Apache License 2.0 (see [LICENSE](LICENSE) and [NOTICE](NOTICE)). The llama.cpp patches modify MIT-licensed
+upstream code: that code stays MIT, and our changes in the patches are offered under MIT as well, so they can go
+upstream.
