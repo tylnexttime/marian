@@ -693,9 +693,9 @@ pressure were not running at the ring's rate after all. But plain `-ncmoe 24` (1
 conditions) still wins decode, and the ring more than halved 4K prefill. The hit rate is 83.3% against 87.5% on the
 M1.0 build at the same budget; a lead, not checked: the exactness floor changes how the budget splits between groups.
 
-### Results still running
+### Controls and the Maya drive test (24/10, afternoon)
 
-These two sections are placeholders, to be filled in when the runs finish.
+These two sections were placeholders while the runs were going; both are filled in from the finished runs.
 
 #### Controls: Coder IQ1_M, Qwen3.6-35B-A3B, Qwen3.8-27B dense
 
@@ -724,6 +724,18 @@ So the right setting is a per-machine, per-model measurement, which is M1.3's ca
 
 #### Maya C: vs E:
 
-Plan: the same Maya benchmark with the model on the system drive and on the model drive, to test whether the drive
-itself limits E34's 1.7-2.1 tok/s (proposed in E34; `docs/m1.0/M1.0-STATUS.md` section 4, step 4). No pre-registered
-prediction. Result: _to be filled in_.
+Conditions: the same Maya `--bench` (3 answers x 256 tokens greedy, prefill at 2K and 8K) with the 89 GB pack on the
+model drive (E:) and on a copy on the system drive (C:, copied at 581 MB/s), in the order E, C, C, E; the copy deleted
+afterwards. No pre-registered prediction. Register E42.
+
+| Run | Decode tok/s | Prefill 2K tok/s | Prefill 8K tok/s | Maya's decode disk wait, ms per token |
+|---|---|---|---|---|
+| E1 | 1.5 | 31 | 161 | 522-526 |
+| C1 | 1.1 | 66 | 248 | 377-765 |
+| C2 | 1.2 | 67 | 248 | 364-732 |
+| E2 | 1.0 | 30 | 124 | 784-1,028 |
+
+Taught us: the drive is **not** the decode lever for Maya on this laptop. The two runs on the same drive differ by 50%,
+more than the drives differ from each other, and decode is still dominated by small random reads on both. It **is** a
+prefill lever: the system drive reads prompts 1.5-2.2x faster. The decode lever remains RAM (E34). Two runs per drive
+cannot resolve a decode difference under about 50%, so "no difference" here means "none this test could see".
