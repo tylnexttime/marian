@@ -291,4 +291,5 @@ From [DESIGN-M1 section 10](docs/design/DESIGN-M1.md), reshaped by what M1.0 mea
 
 Apache License 2.0 (see [LICENSE](LICENSE) and [NOTICE](NOTICE)). The llama.cpp patches modify MIT-licensed
 upstream code: that code stays MIT, and our changes in the patches are offered under MIT as well, so they can go
-upstream.
+upstream. The four milestone tags made before the relicence on 24/10/2026 (`m0`, `design-m1`, `m1.0-results`,
+`m1.1`) still carry the earlier MIT LICENSE file; the project is Apache-2.0 from commit `afed698` onwards.
