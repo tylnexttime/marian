@@ -1,6 +1,8 @@
 """The machine Marian runs on: GPU, VRAM, RAM and driver, read without admin rights.
 
-A profile is only valid for the machine it was measured on, so every profile carries this fingerprint.
+A profile is only valid for the machine it was measured on, so every profile carries this fingerprint. The
+fingerprint is built from hardware only (CPU, RAM, GPU name, VRAM, driver). Nothing derived from the hostname is
+recorded: a short hash of a hostname can be reversed by trying a list of likely names, and profiles get published.
 """
 from __future__ import annotations
 
@@ -26,7 +28,6 @@ class Gpu:
 
 @dataclass
 class Machine:
-    hostname_hash: str          # a hash, so a published profile does not name the machine
     os: str
     cpu: str
     logical_cpus: int
@@ -91,8 +92,7 @@ def detect() -> Machine:
             cpu = winreg.QueryValueEx(k, "ProcessorNameString")[0].strip()
         except OSError:
             pass
-    return Machine(hostname_hash=hashlib.sha256(platform.node().encode()).hexdigest()[:8],
-                   os=f"{platform.system()} {platform.release()}", cpu=cpu, logical_cpus=os.cpu_count() or 0,
+    return Machine(os=f"{platform.system()} {platform.release()}", cpu=cpu, logical_cpus=os.cpu_count() or 0,
                    ram_total_mib=total, gpus=gpus)
 
 

@@ -7,12 +7,12 @@ solution_paths:
   - ../ideas/claude-tyl-ideas-before-consult.md
   - ../ideas/astra-ideas.md
   - ../ideas/fable-ideas.md
-  - ../../../../marian-research/llama.cpp/src/llama-moe-cache.cpp
+  - <research>/llama.cpp/src/llama-moe-cache.cpp
 cite_roots:
   - ../../..
-  - ../../../../marian-research/llama.cpp
+  - <research>/llama.cpp
 in_scope: "The design in DESIGN-M1.md: architecture, the patch set on llama.cpp, the layer on top, the calibration loop, the exactness contract and its tests, the measurement protocol, milestones, risks, open decisions. Performance: every way the design leaves decode, prefill or hit rate on the table on 8-16 GB VRAM / 16-32 GB RAM laptops."
-out_of_scope: "Whether Marian should exist; Chris's four decisions (thin fork on latest llama.cpp; exact by default with opt-in answer-changing switches; built on the reference laptop by Claude Tyl; self-calibrating, not tuned for one machine). Style and wording."
+out_of_scope: "Whether Marian should exist; Chris's four decisions (thin fork on latest llama.cpp; exact by default with opt-in answer-changing switches; built on the reference laptop; self-calibrating, not tuned for one machine). Style and wording."
 context: "Reference laptop: RTX 4090 Laptop 16 GB, i7-13700HX AVX2, 32 GB DDR5, Windows 11, NVMe. Model: Qwen3.8-Flash-Next Swift 1.5 IQ2_XS (qwen4exp, 48 layers, 512 experts, 10 used, 33.02 GiB routed experts in three layouts, 26.82 GiB lazily read PLE table). Strata: 35.5 tok/s decode median, 85.4% hit from 9.16 GiB, with MTP, route-tail skip and CPU/GPU split. Stock llama.cpp -ncmoe 32: 7-10.6 tok/s. The research pack has the citations. Nothing in the design has been run on the new pin."
 known_decisions:
   - "Exact mode means bitwise identical to the same build with every expert in VRAM of the same GPU (section 3). Answer-changing mechanisms are opt-in; do not report their being off by default as a defect."

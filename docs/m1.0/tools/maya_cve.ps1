@@ -1,4 +1,4 @@
-# Alder's ask (b): Maya-S24 on C: (SK hynix PC801) vs E: (PNY CS2241). Copy with timestamps (Maya's pack checks
+# Requested check (b): Maya-S24 on C: (SK hynix PC801) vs E: (PNY CS2241). Copy with timestamps (Maya's pack checks
 # mtime_ns), run Maya's standard --bench in the order E, C, C, E, each with the resource sampler, then delete the C: copy.
 $ErrorActionPreference = 'Continue'
 $M = '<maya-build>\src\project-maya-1.1.19'

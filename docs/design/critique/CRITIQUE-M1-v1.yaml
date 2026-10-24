@@ -47,13 +47,7 @@ stamp:
     skill: critique harness
     skill_version: '3.2'
     engine: critique harness v3.2
-    code:
-    - file: harness
-      sha256: 1bc3ec63a5281822782673a3455d482479fd4a7165ec633a33828bfb3a1f7d34
-    - file: harness
-      sha256: 49d0e671ad1c93328faba3e908d469307d0f018fbe78b7adccd1b4b028a6996c
-    - file: harness
-      sha256: d72d930bd3b894b8d315a131716053dee739e76a290346955a7f049eb3d05172
+    code: []
     roles:
       critics:
       - model: sol
@@ -996,7 +990,7 @@ refute_manifests:
     - file: ../RESEARCH-PACK.md
       status: opened
       supplied: false
-    - file: ../../../../marian-research/llama.cpp/src/llama-moe-cache.cpp
+    - file: <research>/llama.cpp/src/llama-moe-cache.cpp
       status: opened
       supplied: true
     manifest_check:
@@ -1025,7 +1019,7 @@ refute_manifests:
     - file: ../RESEARCH-PACK.md
       status: opened
       supplied: false
-    - file: ../../../../marian-research/llama.cpp/src/llama-moe-cache.cpp
+    - file: <research>/llama.cpp/src/llama-moe-cache.cpp
       status: opened
       supplied: true
     manifest_check:
@@ -1040,7 +1034,7 @@ refute_manifests:
     - file: ../DESIGN-M1.md
       status: opened
       supplied: false
-    - file: ../../../../marian-research/llama.cpp/src/llama-moe-cache.cpp
+    - file: <research>/llama.cpp/src/llama-moe-cache.cpp
       status: opened
       supplied: true
     manifest_check:

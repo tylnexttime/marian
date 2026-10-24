@@ -12,7 +12,7 @@ function Arm($tag, $model, $args_, $extra) {
     "$(Get-Date -Format o) END $tag" | Out-File -Append -Encoding utf8 $log
 }
 $floor = @{ BallastMiB = 8184; DecodeN = 128 }
-$ph16 = @{ Ctx = 16384; Phases = 'warm,decode,pp4k,post' }        # Alder's fields are at ctx 16K
+$ph16 = @{ Ctx = 16384; Phases = 'warm,decode,pp4k,post' }        # the requested Gemma fields are at ctx 16K
 
 # (1) Gemma 4 26B-A4B IQ4_XS, 30 layers, 128 experts, 8 used
 $G = "$L\gemma-4-26B-A4B-it-UD-IQ4_XS.gguf"

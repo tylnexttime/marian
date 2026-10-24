@@ -1,8 +1,6 @@
-OFFICIAL
+# Competitive critique (consulted models): Marian M1 design critique: per-expert VRAM residency on upstream llama.cpp
 
-# Competitive critique (foreign workers): Marian M1 design critique: per-expert VRAM residency on upstream llama.cpp
-
-*Critic lenses: sol = correctness, luna = correctness, astra = operations. Generated 22/10/2026 12:11 (2026-10-22T01:11:03Z UTC). critique harness v3.2.*
+*Critic lenses: sol = correctness, luna = correctness, astra = operations. Generated 22/10/2026 12:11 (2026-10-22T01:11:03Z UTC). Our critique harness v3.2.*
 
 *Model families: critics OpenAI GPT; refuters OpenAI GPT; judges OpenAI GPT. All refuters are one family (OpenAI GPT): a refutation is by a different model, not a different family; cross-family comparison of RANKED findings comes from merging with the other twin's run (standing refutations stay in each run's own report).*
 
@@ -19,9 +17,11 @@ Assurance: **exact** (the hashed bytes are exactly the text the models were give
 | docs\design\ideas\fable-ideas.md | `53e4422d7bae5a7d2252ac85745a2afe1fb3c5e39ac9dbe23dfee91890e4617b` | 40607 |
 | <research>\llama.cpp\src\llama-moe-cache.cpp | `e540b105d487e6cb653ed5f66c4358d170f2b496d9aff0e51f7fa4809e4e4839` | 27400 |
 
-Apparatus: **critique harness 3.2** (critique harness v3.2; code harness 1bc3ec63a528, harness 49d0e671ad1c, harness d72d930bd3b8); critics sol=gpt-6-sol@high (OpenAI GPT), luna=gpt-6-luna@max (OpenAI GPT), astra=gpt-6-astra@medium (OpenAI GPT); collator sol=gpt-6-sol@high (OpenAI GPT); refuters sol=gpt-6-sol@high (OpenAI GPT), luna=gpt-6-luna@max (OpenAI GPT), astra=gpt-6-astra@medium (OpenAI GPT); judges luna=gpt-6-luna@max (OpenAI GPT), sol=gpt-6-sol@high (OpenAI GPT); editor sol=gpt-6-sol@high (OpenAI GPT). Apparatus sha256 `8fc419ebeba383b3476a74c7dc8f675f3dc6493777a2228ec37cd9480f60c16a`: two runs on identical hashes with a different apparatus are not the same experiment.
+Apparatus: **our critique harness 3.2**; critics sol=gpt-6-sol@high (OpenAI GPT), luna=gpt-6-luna@max (OpenAI GPT), astra=gpt-6-astra@medium (OpenAI GPT); collator sol=gpt-6-sol@high (OpenAI GPT); refuters sol=gpt-6-sol@high (OpenAI GPT), luna=gpt-6-luna@max (OpenAI GPT), astra=gpt-6-astra@medium (OpenAI GPT); judges luna=gpt-6-luna@max (OpenAI GPT), sol=gpt-6-sol@high (OpenAI GPT); editor sol=gpt-6-sol@high (OpenAI GPT). Apparatus sha256 `8fc419ebeba383b3476a74c7dc8f675f3dc6493777a2228ec37cd9480f60c16a`: two runs on identical hashes with a different apparatus are not the same experiment.
 
 *Stamp check: every stamped file is unchanged.*
+
+*Publication note: paths are shown repo-relative, with `<research>` for the llama.cpp research checkout. Stamped files were edited after this run (DESIGN-M1.md became v2, and local paths and machine names were removed before publication), so these hashes describe the versions critiqued, not the files as published.*
 
 ## Summary
 
@@ -105,7 +105,7 @@ Prioritise trustworthy M1 measurements and exactness gates, then make the memory
 
 Change request 1 — make M1 evidence credible: implement completion-aware timing and trace integrity (C-07), the row/layout/capacity parity matrix and honest Swift oracle claim (C-13, C-09), verify GPU backends in E2b (C-10), cover large-batch routing in P1/P4 (C-05), and replace assumed equal page-cache history with measured cold, warm and post-prefill protocols (C-20). Change request 2 — make the M1 serving envelope real: select a physical bank-reclamation or supervised-restart response (C-02), constrain concurrency and define request outcomes (C-23), establish P2’s transient-capacity invariant (C-24), turn class D off in the exact default (C-16), and bound automatic probes (C-21). Change request 3 — protect sustained performance and profiles: run C-03’s pinned-build endurance falsifier, advancing minimal sourcing only if needed for M1; correct profile identity and invalidation (C-15), measure staged warm fill (C-11), and add crash-safe profile publication (C-22). Change request 4 — gate M2 I/O and async work: specify aligned, bounded direct-I/O fallback (C-14); require matching map and bank generations for P5a (C-12); and do not enable P5b with a cold tail until intra-token host demand service and exact failure behavior exist (C-04). Change request 5 — qualify broader deployment with real unlike hardware rather than ballast alone (C-17). C-19 and C-18 remain measurement-triggered experiments, not committed speedups. C-01, C-06 and C-08 are deliberately excluded from these solution-author change requests.
 
-## Unverifiable items across runs (v3.2: resolution rate and escalation, from the fitness ledger)
+## Unverifiable items across runs (v3.2: resolution rate and escalation, from the harness's run history)
 
 - **Resolution rate 0.0**: of 3 item(s) ever recorded UNVERIFIABLE, 0 were later decided (refuted or survived) when scope widened; 3 still open, 0 escalated.
 - The rule: unverifiable once -> the brief's author widens access and re-runs once; unverifiable again -> escalated to the brief's author as **apparatus failure: cannot be decided**, not as a finding.
@@ -142,7 +142,7 @@ Change request 1 — make M1 evidence credible: implement completion-aware timin
 | C-06 Distinct-expert cache counters are not row-level lookup hits | CONFIRMED | unverifiable | 3.5 | 2.5 | 2.5 | 2.5 | 5 | yes |
 | C-18 PERF: Measure eight total verification rows before capping at seven | CONFIRMED | not checked | 3.0 | 2.0 | 2.5 | 2.0 | 1 | yes |
 
-## Refuter audit (code-computed; logged to skill-fitness)
+## Refuter audit (code-computed)
 
 - Refute-checked 16 · refuted 0 · survived 13 · **unverifiable 3** (the refuter could not see what deciding needs: unrefuted) · **overruled by both judges 0** (overrule rate -) · one judge disagreed 0 · not assessable 0 · survived but both judges said no 0
 - Collator REFUTED 0 · collator overruled by both judges 0
@@ -200,10 +200,10 @@ Change request 1 — make M1 evidence credible: implement completion-aware timin
 | Item | Refuter said | Recorded | Relied on (status, supplied?) | Manifest problems |
 |---|---|---|---|---|
 | C-01 Bind expert sidecars to payload bytes, not just tensor metadata | REFUTED | UNVERIFIABLE | ../DESIGN-M1.md (opened, NOT supplied) | says it opened ../DESIGN-M1.md, which was not supplied to it |
-| C-03 PERF: Put a minimal bounded expert source before the M1 throughput exit | SURVIVES | SURVIVES | ../DESIGN-M1.md (opened, NOT supplied); ../RESEARCH-PACK.md (opened, NOT supplied); ../../../../marian-research/llama.cpp/src/llama-moe-cache.cpp (opened, supplied) | says it opened ../DESIGN-M1.md, which was not supplied to it; says it opened ../RESEARCH-PACK.md, which was not supplied to it |
+| C-03 PERF: Put a minimal bounded expert source before the M1 throughput exit | SURVIVES | SURVIVES | ../DESIGN-M1.md (opened, NOT supplied); ../RESEARCH-PACK.md (opened, NOT supplied); <research>/llama.cpp/src/llama-moe-cache.cpp (opened, supplied) | says it opened ../DESIGN-M1.md, which was not supplied to it; says it opened ../RESEARCH-PACK.md, which was not supplied to it |
 | C-04 P5b has no specified intra-token host service for a cold tail miss | SURVIVES | SURVIVES | ../DESIGN-M1.md (opened, NOT supplied) | says it opened ../DESIGN-M1.md, which was not supplied to it |
-| C-05 The proposed cache callback misses large-batch prefill routing | SURVIVES | SURVIVES | ../DESIGN-M1.md (opened, NOT supplied); ../RESEARCH-PACK.md (opened, NOT supplied); ../../../../marian-research/llama.cpp/src/llama-moe-cache.cpp (opened, supplied) | says it opened ../DESIGN-M1.md, which was not supplied to it; says it opened ../RESEARCH-PACK.md, which was not supplied to it |
-| C-06 Distinct-expert cache counters are not row-level lookup hits | REFUTED | UNVERIFIABLE | ../DESIGN-M1.md (opened, NOT supplied); ../../../../marian-research/llama.cpp/src/llama-moe-cache.cpp (opened, supplied) | says it opened ../DESIGN-M1.md, which was not supplied to it |
+| C-05 The proposed cache callback misses large-batch prefill routing | SURVIVES | SURVIVES | ../DESIGN-M1.md (opened, NOT supplied); ../RESEARCH-PACK.md (opened, NOT supplied); <research>/llama.cpp/src/llama-moe-cache.cpp (opened, supplied) | says it opened ../DESIGN-M1.md, which was not supplied to it; says it opened ../RESEARCH-PACK.md, which was not supplied to it |
+| C-06 Distinct-expert cache counters are not row-level lookup hits | REFUTED | UNVERIFIABLE | ../DESIGN-M1.md (opened, NOT supplied); <research>/llama.cpp/src/llama-moe-cache.cpp (opened, supplied) | says it opened ../DESIGN-M1.md, which was not supplied to it |
 | C-08 A coarse standalone VRAM probe cannot certify the serving budget | REFUTED | UNVERIFIABLE | ../DESIGN-M1.md (opened, NOT supplied); ../RESEARCH-PACK.md (opened, NOT supplied) | says it opened ../DESIGN-M1.md, which was not supplied to it; says it opened ../RESEARCH-PACK.md, which was not supplied to it |
 | C-09 The Swift parity gate lacks its literal same-GPU all-resident oracle | SURVIVES | SURVIVES | ../DESIGN-M1.md (opened, NOT supplied); ../RESEARCH-PACK.md (opened, NOT supplied) | says it opened ../DESIGN-M1.md, which was not supplied to it; says it opened ../RESEARCH-PACK.md, which was not supplied to it |
 | C-10 A cache-off Swift comparison may not isolate an upstream cache exactness defect | SURVIVES | SURVIVES | ../DESIGN-M1.md (opened, NOT supplied); ../RESEARCH-PACK.md (opened, NOT supplied) | says it opened ../DESIGN-M1.md, which was not supplied to it; says it opened ../RESEARCH-PACK.md, which was not supplied to it |
