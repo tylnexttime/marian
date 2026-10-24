@@ -12,7 +12,7 @@ Marian has two layers.
 1. **M0, a measuring tool** (Python, standard library only). It measures how a model behaves on *this* machine:
    speed and memory for each context size, KV-cache type and GPU/CPU split. Then it picks the fastest configuration
    that fits a request and launches it. It never extrapolates: if nothing measured fits, it says so.
-2. **M1, a thin fork of llama.cpp** (pinned at upstream commit `a37cc461`). Mixture-of-experts (MoE) models only use a
+2. **M1, a thin fork of llama.cpp** (pinned at upstream commit [`a37cc461`](https://github.com/ggml-org/llama.cpp/commit/a37cc461)). Mixture-of-experts (MoE) models only use a
    few of their "experts" for each token. M1 keeps the most-used experts in GPU memory (VRAM) **one expert at a time,
    not one whole layer at a time**, and fetches the rest from system RAM or the SSD as fast as the machine allows. It
    builds on upstream llama.cpp's own expert cache (`--moe-cache-mib`). It is **exact by default**: speed-ups that can
@@ -90,39 +90,48 @@ exactness floor, 0002 fill trace, 0003 P3 minimal), as `git format-patch` files 
 ## Inspirations and prior art
 
 - **llama.cpp and ggml**, [github.com/ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT). Its
-  experimental MoE cache arrived in PR #29887, multi-GPU in #30112, and the SLRU policy in #30637; the large-batch
-  selective copy is PR #29943 (commit `6753a033`). These numbers are on ggml-org/llama.cpp; we have not linked the PR
-  pages individually (links to confirm).
+  experimental MoE cache arrived in [PR #29887](https://github.com/ggml-org/llama.cpp/pull/29887) ("llama : add a GPU
+  cache for MoE experts kept in host memory"), multi-GPU in [#30112](https://github.com/ggml-org/llama.cpp/pull/30112)
+  ("llama: support MoE cache over multiple GPUs"), and the SLRU policy in
+  [#30637](https://github.com/ggml-org/llama.cpp/pull/30637) ("Replace MoE LRU cache with a 50/50 SLRU cache"); the
+  large-batch selective copy is [PR #29943](https://github.com/ggml-org/llama.cpp/pull/29943) ("ggml: refactor
+  selective expert copying to user code"; commit [`6753a033`](https://github.com/ggml-org/llama.cpp/commit/6753a033)).
+  All four are merged; titles checked against the PR pages on 24/10/2026.
 - **Strata**, [github.com/Niko1221/Strata](https://github.com/Niko1221/Strata) (MIT): frequency-ranked expert
   residency, learned profiles, VRAM / RAM / NVMe tiers, router look-ahead, a CPU lane for misses, route-tail skip and
-  a blind-KL quality method.
+  teacher-forced KL quality checks (the method our own blind, paired quality gates build on).
 - **Project Maya**, [github.com/mw00/project-maya](https://github.com/mw00/project-maya) (MIT): ranked residency with
   measured GPU slots and a pinned RAM tier, plus a machine-specific calibration run.
-- **Edge0**, GitHub `Edge0-AI/edge0` ([github.com/Edge0-AI/edge0](https://github.com/Edge0-AI/edge0), Apache-2.0) and
-  the Hugging Face model `Edge0/Edge0-35B-A3B-preview`: streams experts from the SSD with a trained next-layer routing
-  predictor. Its predictor *replaces* the router, which changes answers, so Marian would only ever borrow the idea for
-  prefetch.
+- **Edge0**, GitHub `Edge0-AI/Edge0` ([github.com/Edge0-AI/Edge0](https://github.com/Edge0-AI/Edge0), Apache-2.0) and
+  the Hugging Face model [`Edge0/Edge0-35B-A3B-preview`](https://huggingface.co/Edge0/Edge0-35B-A3B-preview): streams
+  experts from the SSD with a trained next-layer routing predictor. Its predictor *replaces* the router, which changes
+  answers, so Marian would only ever borrow the idea for prefetch. Its technical report is the first row of the table
+  below.
 
 ## Research we drew on
 
 Only papers cited in our design documents are listed, as they are cited there. The design pack cites fewer papers
-than a survey would; that is the honest count, not a selection.
+than a survey would; that is the honest count, not a selection. Titles, authors, years and links below were checked
+against the primary sources (arXiv abstract pages and API, Crossref for DOIs, the project's own repository) on
+24/10/2026.
 
 | Work, as cited | Where cited | What we took from it |
 |---|---|---|
-| "The Other Half of the Memory Wall: Serving 35B MoEs from SSD with Trained Routing Prediction", arXiv 2609.18063 | research pack, addendum 2 | a trained next-layer predictor is a candidate for exact prefetch, never as the routing itself |
-| W-TinyLFU, Einziger, Friedman and Manes, 2017 (link to confirm) | Fable's ideas; DESIGN-M1 section 4 | frequency-gated admission: P3's RAM tier admits a miss only if it is used more than its victim |
-| Pre-gated MoE, Hwang et al. (cited as 2023 and as 2024; link to confirm) | ideas files; DESIGN-M1 section 8 | look-ahead: run layer l+1's router on layer l's state to prefetch experts (planned, P6) |
-| ProMoE (link to confirm) | Claude Tyl's ideas | prefetch of predicted experts (planned, P6) |
-| MoE-Infinity (link to confirm) | Fable's ideas | activation-aware prefetch (planned, P6) |
-| Fiddler, Kamahori et al., 2024 (link to confirm) | DESIGN-M1 section 5 | computing missed experts on the CPU; kept opt-in because it changes rounding |
-| Speculative decoding, Leviathan et al.; Chen et al. 2023 (link to confirm) | Fable's ideas | verified speculation (class D, off in the exact default) |
-| Prompt lookup decoding, Saxena, 2023 (link to confirm) | Fable's ideas | n-gram drafting with a row cap (planned, M3) |
+| Lin, Wang, Cai, Liu and Zeng, 2026, "[The Other Half of the Memory Wall: Serving 35B MoEs from SSD with Trained Routing Prediction](https://arxiv.org/abs/2609.18063)", arXiv 2609.18063 (the technical report of the Edge0 project above) | research pack, addendum 2 | a trained next-layer predictor is a candidate for exact prefetch, never as the routing itself |
+| Einziger, Friedman and Manes, 2017, "[TinyLFU: A Highly Efficient Cache Admission Policy](https://doi.org/10.1145/3149371)", ACM Transactions on Storage 13(4); it introduces W-TinyLFU. A preprint is [arXiv 1512.00727](https://arxiv.org/abs/1512.00727) (2015) | Fable's ideas; DESIGN-M1 section 4 | frequency-gated admission: P3's RAM tier admits a miss only if it is used more than its victim |
+| Hwang et al., "[Pre-gated MoE: An Algorithm-System Co-Design for Fast and Scalable Mixture-of-Expert Inference](https://arxiv.org/abs/2308.12066)", arXiv 2023; ISCA 2024 ([doi](https://doi.org/10.1109/ISCA59077.2024.00078)). Both years are right: preprint 2023, conference 2024 | ideas files; DESIGN-M1 section 8 | look-ahead: run layer l+1's router on layer l's state to prefetch experts (planned, P6) |
+| Song, Zhong, Chen and Chen, 2024, "[ProMoE: Fast MoE-based LLM Serving using Proactive Caching](https://arxiv.org/abs/2410.22134)", arXiv 2410.22134 | Claude Tyl's ideas | prefetch of predicted experts (planned, P6) |
+| Xue, Fu, Lu, Mai and Marina, 2024, "[MoE-Infinity: Efficient MoE Inference on Personal Machines with Sparsity-Aware Expert Cache](https://arxiv.org/abs/2401.14361)", arXiv 2401.14361 (first posted as "Activation-Aware Expert Offloading for Efficient MoE Serving") | Fable's ideas | activation-aware prefetch (planned, P6) |
+| Kamahori, Tang, Gu, Zhu and Kasikci, 2024, "[Fiddler: CPU-GPU Orchestration for Fast Inference of Mixture-of-Experts Models](https://arxiv.org/abs/2402.07033)", arXiv 2402.07033; ICLR 2025 | DESIGN-M1 section 5 | computing missed experts on the CPU; kept opt-in because it changes rounding |
+| Leviathan, Kalman and Matias, "[Fast Inference from Transformers via Speculative Decoding](https://arxiv.org/abs/2211.17192)", arXiv 2022, [ICML 2023](https://proceedings.mlr.press/v202/leviathan23a.html); and Chen, Borgeaud, Irving, Lespiau, Sifre and Jumper, 2023, "[Accelerating Large Language Model Decoding with Speculative Sampling](https://arxiv.org/abs/2302.01318)", arXiv 2302.01318 | Fable's ideas | verified speculation (class D, off in the exact default) |
+| Saxena, 2023, "Prompt lookup decoding": code and write-up in [github.com/apoorvumang/prompt-lookup-decoding](https://github.com/apoorvumang/prompt-lookup-decoding) (no paper found; the repository has no licence file) | Fable's ideas | n-gram drafting with a row cap (planned, M3) |
 
 ## Thanks
 
 - The **llama.cpp and ggml authors**; our design credits name Aman Gupta, Evan Huus and Georgi Gerganov among others.
-  The authors of the MoE cache PRs (#29887, #30112, #30637) are not named by handle in our sources (to confirm).
+  On the PR pages, Aman Gupta ([@am17an](https://github.com/am17an)) opened the MoE cache (#29887), its multi-GPU
+  support (#30112) and the selective-copy refactor (#29943), and Evan Huus ([@eapache](https://github.com/eapache))
+  opened the SLRU policy (#30637).
 - **Strata** (Niko1221 and contributors) and **Project Maya** (Peasant Smith / mw00 and needmorevram), both MIT.
 - The publishers of the public weights we measured: **Qwen** (Qwen3.5-9B; Qwen3.8-Flash-Next, the base of the
   Swift 1.5 IQ2_XS quantisation, whose publisher we still need to confirm), **Google** (Gemma 4 26B-A4B-it, Gemma 4

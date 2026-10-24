@@ -100,7 +100,7 @@ layout (three layouts in 34, 11 and 3 layers; about 660 MiB of experts per token
 that the baseline's "32 IQ2_S layers" is really 34) and Edge0 as prior art.
 
 **The finding that changed the plan:** two weeks earlier, upstream llama.cpp had merged its own GPU cache for MoE
-experts held in host memory (`--moe-cache-mib`, PR #29887, multi-GPU #30112, SLRU policy #30637). It already had
+experts held in host memory (`--moe-cache-mib`, [PR #29887](https://github.com/ggml-org/llama.cpp/pull/29887), multi-GPU [#30112](https://github.com/ggml-org/llama.cpp/pull/30112), SLRU policy [#30637](https://github.com/ggml-org/llama.cpp/pull/30637)). It already had
 per-expert slots, a slot map, `MUL_MAT_ID` on the slot bank, and computes **every expert on the GPU**, so its output
 should not depend on what is cached: that is Marian's exact mode almost for free. The design became "a small patch
 set on upstream's cache plus a calibration layer on top", not a new cache (`DESIGN-M1.md`, section 1).
