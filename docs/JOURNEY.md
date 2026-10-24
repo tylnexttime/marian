@@ -78,12 +78,12 @@ After the Strata-against-stock comparison, Chris decided (project decisions note
    time, and move to the latest upfront"), borrowing ideas from Strata and Maya (both MIT, credited).
 2. **Exact by default.** Speed-ups that can change an answer (route-tail skip, CPU-versus-GPU rounding and the like)
    are opt-in switches, each measured blind for quality before it could ever become a default.
-3. **Built here, by Claude Tyl.** Alder stays on other work.
+3. **Built here, by Claude Tyl.**
 4. **Machine-adaptive.** Marian must calibrate itself on whatever machine it runs on, and must not be tuned for the
    reference laptop. Every machine runs its own tests on first launch, before any model is served.
 5. **Minimum spec: 32 GB of RAM plus an 8 GB GPU**, "work from there".
 6. **Design process:** draft the design, ask two outside models (Astra and Fable) for out-of-the-box ideas, then a
-   foreign critique asking specifically for performance improvements as well as defects.
+   external critique asking specifically for performance improvements as well as defects.
 
 The design ended with eight open decisions. Chris delegated them ("you decide on the best course here"), and the calls
 were (`docs/m1.0/M1.0-STATUS.md`, section 1, and the decisions note): build on upstream's cache rather than port
@@ -205,8 +205,8 @@ are capacity simulations only (C-17). Results:
   **8.0 tok/s with the cache against 15.0 stock**. When misses must come from the SSD, the cache loses.
 
 **The gate question.** Alder asked whether a laptop with 8 GB of VRAM and 32 GB of RAM, most of it taken by everyday
-desktop work, could run a 4-30B model at **20 to 30 tok/s**, with prefill mattering as much as decode because the
-work reads long inputs and writes little. A research-only survey that morning (`m1.0/gate-candidates.md`, from Hugging
+desktop work, could run a 4-30B model at **20 to 30 tok/s**, with prefill mattering as much as decode because the intended use
+reads long inputs and writes little. A research-only survey that morning (`m1.0/gate-candidates.md`, from Hugging
 Face model cards and the fork's architecture table; nothing benchmarked) shortlisted Gemma 4 26B-A4B-it (with an
 IQ3_XXS fallback), Qwen3.5-9B as the dense bar to beat, Gemma 4 E4B-it with NVIDIA's post-trained
 Nemotron-3.5-Bolt-E4B-4GB beside it, and Groot-19B-A3B-261023 as an unverified lead published the day before.
@@ -336,7 +336,7 @@ Taught us: it runs, but SSD-bound; batching helps prefill a lot (39 to 295 tok/s
 
 Conditions: a laptop with 8 GB of VRAM and 32 GB of RAM, stock llama.cpp (build 11760), Gemma 4 26B-A4B-it
 UD-IQ4_XS, 8 threads, each point fills 75% of the context and generates 64 tokens. Best "ok" point and the first
-overflow point per context and KV type. Source: `profiles/example-95c894842b0d-llama.cpp.json`.
+overflow point per context and KV type. Source: `profiles/examples/gemma4-26b-a4b-iq4xs-8gb-blackwell-laptop.json` (anonymised).
 
 | Context | KV | Best ok: `-ncmoe`, decode, prefill tok/s, VRAM peak MiB | First overflow: `-ncmoe`, decode, prefill tok/s |
 |---|---|---|---|
