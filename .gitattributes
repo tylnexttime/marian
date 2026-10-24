@@ -1,0 +1,4 @@
+# patches must keep their bytes (git am), cmd scripts need CRLF, fixtures are binary
+*.patch -text
+*.bat text eol=crlf
+tests/data/*.bin binary

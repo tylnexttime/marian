@@ -1,0 +1,99 @@
+From 2c1cf30a533bcfc376956d52e923355a595678ab Mon Sep 17 00:00:00 2001
+From: tylnexttime <tylnexttime@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 15:17:20 +1100
+Subject: [PATCH] Marian P1 review fixes: S record k/n_tokens from the
+ reshape's source; refuse misstating heads; clean prefix after a failed write;
+ bounded buffer; CP_ACP path
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/llama-moe-cache.cpp     |  4 +++-
+ src/llama-moe-trace-ids.cpp | 19 ++++++++++++++-----
+ src/llama-moe-trace-ids.h   |  2 ++
+ 3 files changed, 19 insertions(+), 6 deletions(-)
+
+diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
+index bc3a9f3d..65d3e099 100644
+--- a/src/llama-moe-cache.cpp
++++ b/src/llama-moe-cache.cpp
+@@ -786,7 +786,9 @@ struct llama_moe_cache::impl {
+         const int64_t t1 = trace ? llama_moe_trace_us() : 0;
+         if (trace_ids) {
+             // every routed id of the step, hits included, from the ids already read (Marian P1)
+-            trace_ids->record('S', il, t0, ggml_nelements(sel)/sel->ne[0], sel->ne[0], ids.data(), sel->ne[0], 1);
++            // sel is the 1-D reshape of [k, n_tokens] (build_moe_cache_slots in llama-graph.cpp): k is ne[0] of its source
++            const int64_t k_sel = sel->op == GGML_OP_RESHAPE && sel->src[0] != nullptr ? sel->src[0]->ne[0] : (int64_t) n_expert_used;
++            trace_ids->record('S', il, t0, (int64_t) ids.size()/k_sel, k_sel, ids.data(), k_sel, 1);
+         }
+         size_t row_hits = 0; // selections, counted per row, whose expert was resident before this step's fills
+         if (trace) {
+diff --git a/src/llama-moe-trace-ids.cpp b/src/llama-moe-trace-ids.cpp
+index 6fa76e80..35c62a93 100644
+--- a/src/llama-moe-trace-ids.cpp
++++ b/src/llama-moe-trace-ids.cpp
+@@ -60,10 +60,18 @@ llama_moe_ids_writer::~llama_moe_ids_writer() {
+ 
+ void llama_moe_ids_writer::record(char kind, int32_t layer, int64_t t_us, int64_t n_tokens, int64_t k, const int32_t * ids,
+         int64_t row_stride, int64_t col_stride) {
++    if (k < 1 || k > 255 || n_tokens < 0 || n_tokens > (int64_t) UINT32_MAX) {
++        n_bad++; // never write a head that misstates the ids after it
++        return;
++    }
+     std::lock_guard<std::mutex> lk(m);
++    if (cur.size() >= 64*hiwater) {
++        n_bad++; // the writer has stalled: drop whole records rather than grow without bound
++        return;
++    }
+     llama_moe_ids_put(cur, (uint8_t) kind, 1);
+-    llama_moe_ids_put(cur, (uint64_t) std::clamp<int64_t>(k, 0, 255), 1);
+-    llama_moe_ids_put(cur, (uint64_t) std::clamp<int64_t>(layer, 0, 65535), 2);
++    llama_moe_ids_put(cur, (uint64_t) k, 1);
++    llama_moe_ids_put(cur, layer >= 0 && layer < 0xffff ? (uint64_t) layer : 0xffffu, 2);
+     llama_moe_ids_put(cur, (uint64_t) n_tokens, 4);
+     llama_moe_ids_put(cur, (uint64_t) t_us, 8);
+     for (int64_t r = 0; r < n_tokens; ++r) {
+@@ -107,7 +115,8 @@ void llama_moe_ids_writer::run() {
+ 
+ void llama_moe_ids_writer::write_out() {
+     if (!out.empty()) {
+-        if (!write_all(out.data(), out.size())) {
++        // after one failed write nothing more is written, so the file stays a clean prefix of the records
++        if (n_failed.load() == 0 && !write_all(out.data(), out.size())) {
+             n_failed++;
+         }
+         out.clear();
+@@ -116,10 +125,10 @@ void llama_moe_ids_writer::write_out() {
+ 
+ #if defined(_WIN32)
+ bool llama_moe_ids_writer::open_file(const char * path) {
+-    const int n = MultiByteToWideChar(CP_UTF8, 0, path, -1, nullptr, 0);
++    const int n = MultiByteToWideChar(CP_ACP, 0, path, -1, nullptr, 0); // getenv returns the ANSI code page
+     std::wstring w(n > 0 ? n : 1, L'\0');
+     if (n > 0) {
+-        MultiByteToWideChar(CP_UTF8, 0, path, -1, &w[0], n);
++        MultiByteToWideChar(CP_ACP, 0, path, -1, &w[0], n);
+     }
+     HANDLE h = CreateFileW(w.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+     is_open = h != INVALID_HANDLE_VALUE;
+diff --git a/src/llama-moe-trace-ids.h b/src/llama-moe-trace-ids.h
+index adc0591f..2163738c 100644
+--- a/src/llama-moe-trace-ids.h
++++ b/src/llama-moe-trace-ids.h
+@@ -61,6 +61,7 @@ public:
+ 
+     uint64_t records() const;
+     uint64_t failed_writes() const { return n_failed.load(); }
++    uint64_t bad_records() const { return n_bad.load(); }   // refused heads and records dropped by a stalled writer
+ 
+ private:
+     static constexpr size_t hiwater = 1 << 20;
+@@ -83,5 +84,6 @@ private:
+     bool stop = false;
+     uint64_t n_records = 0;
+     std::atomic<uint64_t> n_failed{0};
++    std::atomic<uint64_t> n_bad{0};
+     std::thread thread;
+ };
+-- 
+2.45.1.windows.1
+
