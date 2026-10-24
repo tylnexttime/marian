@@ -15,71 +15,71 @@
 
 Speed excludes requests that stopped within 8 tokens (counted here): f1-c2400 decode 1, f1-c2400 post 1, f1-stock45 decode 1, f1-stock45 post 1, f2-c2400 decode 1, f2-c2400 post 1, f2-stock45 decode 1, f2-stock45 post 1, r1-c4000 decode 1, r1-c4000 post 1, r1-c6500 decode 1, r1-c6500 post 1, r1-c9400 decode 1, r1-c9400 post 1, r1-stock34 decode 1, r1-stock34 post 1, r2-c4000 decode 1, r2-c4000 post 1, r2-c6500 decode 1, r2-c6500 post 1, r2-c9400 decode 1, r2-c9400 post 1, r2-stock34 decode 1, r2-stock34 post 1
 
-| arm A | arm B | decode texts identical | top-3 probs identical | compared over |
-|---|---|---|---|---|
-| f1-c2400 | f1-stock45 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-c2400 | f2-c2400 | 10/10 | 10/10 | whole text |
-| f1-c2400 | f2-stock45 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-c2400 | r1-c4000 | 5/10 | 5/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-c2400 | r1-c6500 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-c2400 | r1-c9400 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-c2400 | r1-stock34 | 3/10 | 3/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-c2400 | r2-c4000 | 5/10 | 5/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-c2400 | r2-c6500 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-c2400 | r2-c9400 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-c2400 | r2-stock34 | 3/10 | 3/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-stock45 | f2-c2400 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-stock45 | f2-stock45 | 10/10 | 10/10 | whole text |
-| f1-stock45 | r1-c4000 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-stock45 | r1-c6500 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-stock45 | r1-c9400 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-stock45 | r1-stock34 | 6/10 | 6/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-stock45 | r2-c4000 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-stock45 | r2-c6500 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-stock45 | r2-c9400 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| f1-stock45 | r2-stock34 | 6/10 | 6/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-c2400 | f2-stock45 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-c2400 | r1-c4000 | 5/10 | 5/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-c2400 | r1-c6500 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-c2400 | r1-c9400 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-c2400 | r1-stock34 | 3/10 | 3/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-c2400 | r2-c4000 | 5/10 | 5/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-c2400 | r2-c6500 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-c2400 | r2-c9400 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-c2400 | r2-stock34 | 3/10 | 3/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-stock45 | r1-c4000 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-stock45 | r1-c6500 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-stock45 | r1-c9400 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-stock45 | r1-stock34 | 6/10 | 6/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-stock45 | r2-c4000 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-stock45 | r2-c6500 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-stock45 | r2-c9400 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| f2-stock45 | r2-stock34 | 6/10 | 6/10 | shared prefix (lengths differ; texts compared by token id) |
-| r1-c4000 | r1-c6500 | 7/10 | 7/10 | shared prefix (lengths differ; texts compared by token id) |
-| r1-c4000 | r1-c9400 | 7/10 | 7/10 | shared prefix (lengths differ; texts compared by token id) |
-| r1-c4000 | r1-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| r1-c4000 | r2-c4000 | 10/10 | 10/10 | whole text |
-| r1-c4000 | r2-c6500 | 7/10 | 7/10 | shared prefix (lengths differ; texts compared by token id) |
-| r1-c4000 | r2-c9400 | 7/10 | 7/10 | shared prefix (lengths differ; texts compared by token id) |
-| r1-c4000 | r2-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| r1-c6500 | r1-c9400 | 10/10 | 10/10 | whole text |
-| r1-c6500 | r1-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| r1-c6500 | r2-c4000 | 7/10 | 7/10 | shared prefix (lengths differ; texts compared by token id) |
-| r1-c6500 | r2-c6500 | 10/10 | 10/10 | whole text |
-| r1-c6500 | r2-c9400 | 10/10 | 10/10 | whole text |
-| r1-c6500 | r2-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| r1-c9400 | r1-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| r1-c9400 | r2-c4000 | 7/10 | 7/10 | shared prefix (lengths differ; texts compared by token id) |
-| r1-c9400 | r2-c6500 | 10/10 | 10/10 | whole text |
-| r1-c9400 | r2-c9400 | 10/10 | 10/10 | whole text |
-| r1-c9400 | r2-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| r1-stock34 | r2-c4000 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| r1-stock34 | r2-c6500 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| r1-stock34 | r2-c9400 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| r1-stock34 | r2-stock34 | 10/10 | 10/10 | whole text |
-| r2-c4000 | r2-c6500 | 7/10 | 7/10 | shared prefix (lengths differ; texts compared by token id) |
-| r2-c4000 | r2-c9400 | 7/10 | 7/10 | shared prefix (lengths differ; texts compared by token id) |
-| r2-c4000 | r2-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| r2-c6500 | r2-c9400 | 10/10 | 10/10 | whole text |
-| r2-c6500 | r2-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| r2-c9400 | r2-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
+| arm A | arm B | decode texts identical | top-3 logprobs identical | max abs dlogprob, chosen token | compared over |
+|---|---|---|---|---|---|
+| f1-c2400 | f1-stock45 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-c2400 | f2-c2400 | 10/10 | not measured | - | whole text |
+| f1-c2400 | f2-stock45 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-c2400 | r1-c4000 | 5/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-c2400 | r1-c6500 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-c2400 | r1-c9400 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-c2400 | r1-stock34 | 3/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-c2400 | r2-c4000 | 5/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-c2400 | r2-c6500 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-c2400 | r2-c9400 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-c2400 | r2-stock34 | 3/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-stock45 | f2-c2400 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-stock45 | f2-stock45 | 10/10 | not measured | - | whole text |
+| f1-stock45 | r1-c4000 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-stock45 | r1-c6500 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-stock45 | r1-c9400 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-stock45 | r1-stock34 | 6/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-stock45 | r2-c4000 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-stock45 | r2-c6500 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-stock45 | r2-c9400 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f1-stock45 | r2-stock34 | 6/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-c2400 | f2-stock45 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-c2400 | r1-c4000 | 5/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-c2400 | r1-c6500 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-c2400 | r1-c9400 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-c2400 | r1-stock34 | 3/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-c2400 | r2-c4000 | 5/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-c2400 | r2-c6500 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-c2400 | r2-c9400 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-c2400 | r2-stock34 | 3/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-stock45 | r1-c4000 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-stock45 | r1-c6500 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-stock45 | r1-c9400 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-stock45 | r1-stock34 | 6/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-stock45 | r2-c4000 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-stock45 | r2-c6500 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-stock45 | r2-c9400 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| f2-stock45 | r2-stock34 | 6/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r1-c4000 | r1-c6500 | 7/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r1-c4000 | r1-c9400 | 7/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r1-c4000 | r1-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r1-c4000 | r2-c4000 | 10/10 | not measured | - | whole text |
+| r1-c4000 | r2-c6500 | 7/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r1-c4000 | r2-c9400 | 7/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r1-c4000 | r2-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r1-c6500 | r1-c9400 | 10/10 | not measured | - | whole text |
+| r1-c6500 | r1-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r1-c6500 | r2-c4000 | 7/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r1-c6500 | r2-c6500 | 10/10 | not measured | - | whole text |
+| r1-c6500 | r2-c9400 | 10/10 | not measured | - | whole text |
+| r1-c6500 | r2-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r1-c9400 | r1-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r1-c9400 | r2-c4000 | 7/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r1-c9400 | r2-c6500 | 10/10 | not measured | - | whole text |
+| r1-c9400 | r2-c9400 | 10/10 | not measured | - | whole text |
+| r1-c9400 | r2-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r1-stock34 | r2-c4000 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r1-stock34 | r2-c6500 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r1-stock34 | r2-c9400 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r1-stock34 | r2-stock34 | 10/10 | not measured | - | whole text |
+| r2-c4000 | r2-c6500 | 7/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r2-c4000 | r2-c9400 | 7/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r2-c4000 | r2-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r2-c6500 | r2-c9400 | 10/10 | not measured | - | whole text |
+| r2-c6500 | r2-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| r2-c9400 | r2-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |

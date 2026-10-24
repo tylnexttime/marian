@@ -53,7 +53,15 @@ function Ask([string]$phase, [int]$idx, [string]$prompt, [int]$n, [int]$nprobs) 
         $b = Now-Us
         $probs = $null
         if ($nprobs -gt 0 -and $r.completion_probabilities) {
-            $probs = @($r.completion_probabilities | ForEach-Object { @{ id = $_.id; top = @($_.top_probs | ForEach-Object { @(, $_.id, $_.prob) }) } })
+            # This server sends top_logprobs/logprob (pre-sampling) unless post_sampling_probs is set; until 24/10/2026 this
+            # read top_probs/prob, got nothing, and `$null | ForEach-Object` stored [[null], null] for every token, so
+            # every top-3 comparison compared nulls. Read both shapes, and refuse a response that carries no top-k at all.
+            $pv = { param($o) if ($null -ne $o.logprob) { [double]$o.logprob } elseif ($null -ne $o.prob) { [double]$o.prob } else { $null } }
+            $probs = @($r.completion_probabilities | ForEach-Object {
+                $tl = if ($null -ne $_.top_logprobs) { $_.top_logprobs } else { $_.top_probs }
+                @{ id = $_.id; lp = (& $pv $_); top = @($tl | Where-Object { $null -ne $_ } | ForEach-Object { , @($_.id, (& $pv $_)) }) } })
+            if ($probs.Count -eq 0 -or @($probs | Where-Object { $_.top.Count -eq 0 -or $null -eq $_.lp }).Count) {
+                throw "n_probs=$nprobs but the response carried no usable top-k: the probability parser reads the wrong fields" }
         }
         $rec = [ordered]@{ tag = $Tag; phase = $phase; idx = $idx; t0_us = $a; t1_us = $b; ok = $true;
             prompt_n = $r.timings.prompt_n; prompt_tps = $r.timings.prompt_per_second; gen_n = $r.timings.predicted_n;

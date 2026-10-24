@@ -368,11 +368,13 @@ the bad head. Lesson: the unit test exercised the writer, not the hook's argumen
 
 | Check | Result |
 |---|---|
-| 1. output identity, i1 (trace on) vs e1-c9400 (trace off) | **10/10 texts, 10/10 top-3** |
+| 1. output identity, i1 (trace on) vs e1-c9400 (trace off) | **10/10 texts** (top-3: not recorded, see the note below the table) |
 | 2. geometry of the laptop's shards | **identical** to `swift-1.5-iq2_xs.geometry.json` |
 | 3. replay = server | S lines **107,008 / 107,008** identical; fill steps **58,110 / 58,110**; median hit replay minus server **+0.00** points (M1.1's exit check) |
 | 4. trace size and health | 4.10 MB, 107,221 records, 0 truncated bytes, `k = 10` in every record, the 28-token step read correctly, no "trace is off" WARN |
 | 5. speed vs e1 | **outside the band:** 6.6 vs 7.8 tok/s median (-15%); started with 4.5 GiB less free RAM (the page cache held other data) and 15 ms/token more host fetch; attributed to page-cache state, not isolated |
+
+> **Correction 24/10/2026:** the top-3 probabilities in this check were never recorded (the client read `top_probs`/`prob`; this server sends `top_logprobs`/`logprob`), so the probability half compared nulls and could not fail; the token-identity half stands. Measured properly in JOURNEY A22: identical to full precision.
 
 **The P3 question (section 5.6), answered on the real trace** (`i1-c9400.replay.md`, test prompts, budget 9,400 MiB):
 no realistic tier policy reaches 75% of decode miss bytes within 16 GiB (current 56.9%, warm 59.4%, static-miss

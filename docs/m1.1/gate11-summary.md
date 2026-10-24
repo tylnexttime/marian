@@ -5,6 +5,6 @@
 
 Speed excludes requests that stopped within 8 tokens (counted here): none
 
-| arm A | arm B | decode texts identical | top-3 probs identical | compared over |
-|---|---|---|---|---|
-| gate11-gemma26-c2500-mmap | gate11-gemma26-c2500-ring | 10/10 | 10/10 | whole text |
+| arm A | arm B | decode texts identical | top-3 logprobs identical | max abs dlogprob, chosen token | compared over |
+|---|---|---|---|---|---|
+| gate11-gemma26-c2500-mmap | gate11-gemma26-c2500-ring | 10/10 | not measured | - | whole text |

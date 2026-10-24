@@ -47,9 +47,14 @@ These are why a measuring tool matters. Sources and conditions for every figure 
   SSD (measured at 0.41 GB/s, against 6.6 GB/s from resident RAM and 10.3 GB/s from pinned RAM).
 - **Headline: Marian's exact RAM tier roughly doubles decode against upstream's cache.** M1.1's miss source (an
   unbuffered staging ring plus a pinned RAM tier) takes the larger Qwen3.8-Flash-Next model on the 16 GB reference
-  laptop from **7.3 / 6.3 tok/s** on upstream's path to **14.7 / 14.0 tok/s** with a 6 GiB pinned tier (median per
-  request, rounds 1 / 2; two rounds, indicative), with identical answers (10/10). The price: **prefill about 3x slower**, because prefill still reads
-  through the memory map and the pinned tier takes the page cache it needs (see Limitations).
+  laptop from **7.3 / 6.3 tok/s** on upstream's path to **14.4-14.6 tok/s** with a 6 GiB pinned tier, and
+  **13.4-13.7 tok/s right after a 16K-token prompt** (all-tokens rate, five interleaved rounds, every one above the
+  12 tok/s target). Against stock llama.cpp's best layer offload for the same model (`-ncmoe 34`) that is about
+  **1.5x faster warm and 3.4x faster after a long prompt**, in 5 of 5 rounds. The answers are identical to the
+  all-in-VRAM reference down to every recorded log-probability (Gemma 4 26B, all three miss sources), which stock
+  offload is not. The price: **prefill 4-5x slower than stock** (about 3x slower than upstream's cache path),
+  because prefill still reads through the memory map and the pinned tier takes the page cache it needs (see
+  Limitations).
 - **The practical question we were asked** (can that 8 GB / 32 GB laptop, with most of its RAM in use, run a 4-30B
   model at 20 to 30 tok/s?) **was answered yes by stock llama.cpp with good offload settings, not by Marian's cache**:
   Gemma 4 26B-A4B at IQ3_XXS with `-ncmoe 18` ran at 26.3 tok/s, and small dense models that fit in VRAM ran at
@@ -152,25 +157,29 @@ Be warned; this is research code.
 - **One machine.** Every M1 number comes from one reference laptop (RTX 4090 Laptop 16 GB, 32 GB RAM). The "8 GB GPU"
   results are a **simulation**: a VRAM ballast on the 16 GB card keeps its kernels, PCIe link and SSD (design item
   C-17), and the desktop's own display memory made it harsher than a real 8 GB card.
-- **Few rounds.** Most arms ran twice (some once). Treat differences under about 10% as noise.
-- **The tier costs prefill about 3x.** P3 serves decode misses only: prefill batches above 32 tokens still go through
+- **Few rounds.** Most arms ran twice (some once); only the tier-against-stock comparison has the five interleaved
+  rounds the design asks for. Treat other differences under about 10% as noise.
+- **The tier costs prefill 4-5x against stock (about 3x against upstream's cache).** P3 serves decode misses only:
+  prefill batches above 32 tokens still go through
   upstream's selective copy, which faults through the memory map, and the 6 GiB pinned tier takes the page cache
   that path needs. 16K-token prefill fell from about 112-119 tok/s to 34-36 tok/s (4K: about 47-53 to 23-26). The
   ring costs less (16K: 105-110). This is why neither is a default.
 - **The pinned tier competes with the desktop.** It takes RAM the OS and other programs cannot page; pinning can fail
   (it then falls back to pageable memory and says so).
-- **The M1 decode target is not yet confirmed.** M1's exit asks for at least 12 tok/s on the reference laptop both
-  warm and right after a 16K prompt. On the corrected figures (requests that stop within 8 tokens left out) the 6 GiB
-  tier arm is above 12 tok/s in both states in both rounds: 14.7 / 14.0 warm and 14.8 / 14.4 after a 16K prompt
-  (median per request; the all-tokens rates are 13.2 to 14.2). That is two rounds, and the design (section 9.3)
-  needs five, so it is not a claim yet. A five-round confirmation is running
-  ([JOURNEY A21](docs/JOURNEY.md#a21-the-five-round-confirmation)).
-- **Exactness is proved at token level, not yet bitwise.** Answers are identical across cache budgets and miss sources
-  (10/10 greedy texts and top-3 probabilities). Against the true reference, every expert in VRAM, Gemma 4 26B-A4B's
-  cache arms (old and new build, memory-mapped and ring miss sources) match on 1,280 of 1,280 generated tokens and on
-  every top-3 probability. Not yet done: bitwise logit comparison, the single-layer harness and the kernel-boundary
-  parity matrix the design requires; for the Swift model a literal all-in-VRAM reference cannot fit on this GPU at all
-  (C-09).
+- **The decode target is met on one machine, one model, one prompt set.** Five interleaved rounds (design 9.3) put
+  the 6 GiB tier at 14.4-14.6 tok/s warm and 13.4-13.7 after a 16K prompt, all above 12
+  ([JOURNEY A21](docs/JOURNEY.md#a21-the-five-round-confirmation)). It has not been measured on a real 8 GB card or a
+  second laptop.
+- **Exactness is proved at log-probability level, not yet bitwise over the full logits.** Against the true
+  reference, every expert in VRAM, Gemma 4 26B-A4B's cache arms with memory-mapped, ring and tier misses match on all
+  1,280 generated tokens and on every top-3 log-probability to full float precision (largest difference 0; the
+  reference run against itself also 0). Stock offload of the same model, by contrast, changes every one of the 10
+  answers and moves log-probabilities by up to 0.59, because it computes some experts on the CPU. Until 24/10/2026 the
+  probability half of this check was empty (the client read field names this server does not send), so earlier
+  claims of identical probabilities rested on token identity alone; see
+  [JOURNEY A22](docs/JOURNEY.md#a22-exactness-with-real-probabilities). Not yet done: full-logit comparison, the
+  single-layer harness and the kernel-boundary parity matrix; for the Swift model a literal all-in-VRAM reference
+  cannot fit on this GPU (C-09), so its cache arms are checked against each other (identical, difference 0).
 - **The miss-path probe overstated its baseline.** The replay probe's memory-mapped pass ran 23% to 1.9x slower than
   the real server, so its ratios flattered the ring and the tier.
 - **No routing profile, no held-out split, no learning yet.** The hit rates are upstream SLRU's, warming over a fixed
@@ -188,7 +197,7 @@ Be warned; this is research code.
 |---|---|---|
 | M0 | done, 21/10/2026 | profiler, planner, launcher; first measured profile in `profiles/` |
 | M1.0 | measured, 22-24/10/2026 | upstream cache vs stock on Swift 1.5 IQ2_XS; copy probe; 8 GB floor arms; gate and control models |
-| M1.1 | in progress | exactness floor PASS; trace-replay probe GO; P3 verify run PASS (11/11); P3 server arms measured 24/10/2026 (two rounds): the tier doubles decode, exact, but costs prefill about 3x; controls and the Maya drive test done; replay = server exactly (+0.00 points, the M1.1 exit check); five-round confirmation of the decode exit running |
+| M1.1 | in progress | exactness floor PASS; trace-replay probe GO; P3 verify run PASS (11/11); P3 server arms measured 24/10/2026 (two rounds): the tier doubles decode, exact, but costs prefill about 3x; controls and the Maya drive test done; replay = server exactly (+0.00 points, the M1.1 exit check); five-round confirmation: decode exit met (E44); log-probability exactness against all-VRAM (E45) |
 | M1.2 onwards | not started | ranked policy, calibration, real-hardware validation (see [DESIGN-M1 section 10](docs/design/DESIGN-M1.md)) |
 
 **M1 exit criteria, and where each stands** (reference laptop, Swift 1.5 IQ2_XS):
@@ -196,9 +205,9 @@ Be warned; this is research code.
 | Criterion | Target | Where it stands |
 |---|---|---|
 | VRAM lookup hit rate, median per decode token | at least 85% | **met** at a 9,400 MiB cache: 90.8% (10th percentile 80.4%), with upstream's SLRU |
-| Exactness | answers independent of placement | **met across budgets and miss sources** after the exactness floor (10/10); harness and parity matrix not built |
-| Decode, warm | at least 12 tok/s | **above 12 in both rounds, not yet confirmed** (design 9.3 needs five rounds; a five-round confirmation is running, JOURNEY A21): P3 tier 14.7 / 14.0 tok/s (upstream's path 7.3 / 6.3; stock 10.6 / 10.9 in the first campaign, 8.6 / 11.0 in the P3 campaign) |
-| Decode after a 16K prompt | at least 12 tok/s | **above 12 in both rounds, not yet confirmed** (same two rounds; the five-round confirmation is running): P3 tier 14.8 / 14.4 tok/s (upstream's path 5.0 / 4.6; stock 5.3 / 5.1 in the first campaign, 4.2 / 3.8 in the P3 campaign) |
+| Exactness | answers independent of placement | **met at log-probability level**: cache arms vs the all-VRAM reference (Gemma 26B) identical on 1,280 tokens and every top-3 log-probability, all three miss sources; Swift cache arms identical to each other. Full-logit check, harness and parity matrix not built |
+| Decode, warm | at least 12 tok/s | **met, five rounds**: P3 tier 14.4-14.6 tok/s (all-tokens rate; medians 14.5-15.1); stock `-ncmoe 34` 8.2-10.8 in the same rounds; upstream's path 7.3 / 6.3 |
+| Decode after a 16K prompt | at least 12 tok/s | **met, five rounds**: P3 tier 13.4-13.7 tok/s (medians 14.4-14.7); stock 3.9-8.5 in the same rounds; upstream's path 5.0 / 4.6 |
 
 ## Measured results (short)
 
@@ -223,6 +232,16 @@ Swift 1.5 IQ2_XS (a quantisation of Qwen3.8-Flash-Next, 33 GiB of experts) on th
 | upstream cache 9,400 MiB, memory-mapped misses | 7.3 / 6.3 | 5.0 / 4.6 | 119.3 / 112.0 |
 | + P3 ring | 12.4 / 12.0 | 10.7 / 11.7 | 105.0 / 109.9 |
 | + P3 6 GiB pinned tier | 14.7 / 14.0 | 14.8 / 14.4 | 34.0 / 35.8 |
+
+The confirmation, five interleaved rounds (T S | S T | T S | S T | T S), all-tokens rate in tok/s:
+
+| Round | Tier decode | Stock decode | Tier after 16K | Stock after 16K | Prefill 16K, tier / stock |
+|---|---|---|---|---|---|
+| 1 | 14.5 | 10.8 | 13.4 | 3.9 | 29.7 / 144.4 |
+| 2 | 14.4 | 9.6 | 13.6 | 4.2 | 34.4 / 148.6 |
+| 3 | 14.6 | 8.2 | 13.4 | 3.9 | 31.2 / 155.0 |
+| 4 | 14.5 | 9.5 | 13.7 | 3.9 | 34.4 / 141.8 |
+| 5 | 14.6 | 8.2 | 13.5 | 8.5 | 30.3 / 154.8 |
 
 Everything else, with conditions and what each table taught us: [docs/JOURNEY.md](docs/JOURNEY.md).
 

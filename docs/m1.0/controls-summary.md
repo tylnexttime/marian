@@ -14,60 +14,60 @@
 
 Speed excludes requests that stopped within 8 tokens (counted here): none
 
-| arm A | arm B | decode texts identical | top-3 probs identical | compared over |
-|---|---|---|---|---|
-| coder-floor-c2400 | coder-floor-ncmoe45 | 3/10 | 3/10 | whole text |
-| coder-floor-c2400 | coder-full-c9400 | 3/10 | 3/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-c2400 | dense27-floor-ngl40 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-c2400 | dense27-full | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-c2400 | gemma-floor-c2500 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-c2400 | gemma-floor-ncmoe24 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-c2400 | gemma-full-ncmoe0 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-c2400 | q36-floor-c2500 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-c2400 | q36-floor-ncmoe32 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-c2400 | q36-full-c9000 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-ncmoe45 | coder-full-c9400 | 4/10 | 4/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-ncmoe45 | dense27-floor-ngl40 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-ncmoe45 | dense27-full | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-ncmoe45 | gemma-floor-c2500 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-ncmoe45 | gemma-floor-ncmoe24 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-ncmoe45 | gemma-full-ncmoe0 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-ncmoe45 | q36-floor-c2500 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-ncmoe45 | q36-floor-ncmoe32 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-floor-ncmoe45 | q36-full-c9000 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-full-c9400 | dense27-floor-ngl40 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-full-c9400 | dense27-full | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-full-c9400 | gemma-floor-c2500 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-full-c9400 | gemma-floor-ncmoe24 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-full-c9400 | gemma-full-ncmoe0 | 0/10 | 0/10 | whole text |
-| coder-full-c9400 | q36-floor-c2500 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-full-c9400 | q36-floor-ncmoe32 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| coder-full-c9400 | q36-full-c9000 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| dense27-floor-ngl40 | dense27-full | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| dense27-floor-ngl40 | gemma-floor-c2500 | 0/10 | 0/10 | whole text |
-| dense27-floor-ngl40 | gemma-floor-ncmoe24 | 0/10 | 0/10 | whole text |
-| dense27-floor-ngl40 | gemma-full-ncmoe0 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| dense27-floor-ngl40 | q36-floor-c2500 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| dense27-floor-ngl40 | q36-floor-ncmoe32 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| dense27-floor-ngl40 | q36-full-c9000 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| dense27-full | gemma-floor-c2500 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| dense27-full | gemma-floor-ncmoe24 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| dense27-full | gemma-full-ncmoe0 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| dense27-full | q36-floor-c2500 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| dense27-full | q36-floor-ncmoe32 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| dense27-full | q36-full-c9000 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gemma-floor-c2500 | gemma-floor-ncmoe24 | 0/10 | 0/10 | whole text |
-| gemma-floor-c2500 | gemma-full-ncmoe0 | 10/10 | 10/10 | shared prefix (lengths differ; texts compared by token id) |
-| gemma-floor-c2500 | q36-floor-c2500 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gemma-floor-c2500 | q36-floor-ncmoe32 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gemma-floor-c2500 | q36-full-c9000 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gemma-floor-ncmoe24 | gemma-full-ncmoe0 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gemma-floor-ncmoe24 | q36-floor-c2500 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gemma-floor-ncmoe24 | q36-floor-ncmoe32 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gemma-floor-ncmoe24 | q36-full-c9000 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gemma-full-ncmoe0 | q36-floor-c2500 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gemma-full-ncmoe0 | q36-floor-ncmoe32 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gemma-full-ncmoe0 | q36-full-c9000 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| q36-floor-c2500 | q36-floor-ncmoe32 | 3/10 | 3/10 | shared prefix (lengths differ; texts compared by token id) |
-| q36-floor-c2500 | q36-full-c9000 | 7/10 | 7/10 | shared prefix (lengths differ; texts compared by token id) |
-| q36-floor-ncmoe32 | q36-full-c9000 | 3/10 | 3/10 | shared prefix (lengths differ; texts compared by token id) |
+| arm A | arm B | decode texts identical | top-3 logprobs identical | max abs dlogprob, chosen token | compared over |
+|---|---|---|---|---|---|
+| coder-floor-c2400 | coder-floor-ncmoe45 | 3/10 | not measured | - | whole text |
+| coder-floor-c2400 | coder-full-c9400 | 3/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-c2400 | dense27-floor-ngl40 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-c2400 | dense27-full | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-c2400 | gemma-floor-c2500 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-c2400 | gemma-floor-ncmoe24 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-c2400 | gemma-full-ncmoe0 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-c2400 | q36-floor-c2500 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-c2400 | q36-floor-ncmoe32 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-c2400 | q36-full-c9000 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-ncmoe45 | coder-full-c9400 | 4/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-ncmoe45 | dense27-floor-ngl40 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-ncmoe45 | dense27-full | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-ncmoe45 | gemma-floor-c2500 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-ncmoe45 | gemma-floor-ncmoe24 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-ncmoe45 | gemma-full-ncmoe0 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-ncmoe45 | q36-floor-c2500 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-ncmoe45 | q36-floor-ncmoe32 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-floor-ncmoe45 | q36-full-c9000 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-full-c9400 | dense27-floor-ngl40 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-full-c9400 | dense27-full | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-full-c9400 | gemma-floor-c2500 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-full-c9400 | gemma-floor-ncmoe24 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-full-c9400 | gemma-full-ncmoe0 | 0/10 | not measured | - | whole text |
+| coder-full-c9400 | q36-floor-c2500 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-full-c9400 | q36-floor-ncmoe32 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| coder-full-c9400 | q36-full-c9000 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| dense27-floor-ngl40 | dense27-full | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| dense27-floor-ngl40 | gemma-floor-c2500 | 0/10 | not measured | - | whole text |
+| dense27-floor-ngl40 | gemma-floor-ncmoe24 | 0/10 | not measured | - | whole text |
+| dense27-floor-ngl40 | gemma-full-ncmoe0 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| dense27-floor-ngl40 | q36-floor-c2500 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| dense27-floor-ngl40 | q36-floor-ncmoe32 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| dense27-floor-ngl40 | q36-full-c9000 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| dense27-full | gemma-floor-c2500 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| dense27-full | gemma-floor-ncmoe24 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| dense27-full | gemma-full-ncmoe0 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| dense27-full | q36-floor-c2500 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| dense27-full | q36-floor-ncmoe32 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| dense27-full | q36-full-c9000 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gemma-floor-c2500 | gemma-floor-ncmoe24 | 0/10 | not measured | - | whole text |
+| gemma-floor-c2500 | gemma-full-ncmoe0 | 10/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gemma-floor-c2500 | q36-floor-c2500 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gemma-floor-c2500 | q36-floor-ncmoe32 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gemma-floor-c2500 | q36-full-c9000 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gemma-floor-ncmoe24 | gemma-full-ncmoe0 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gemma-floor-ncmoe24 | q36-floor-c2500 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gemma-floor-ncmoe24 | q36-floor-ncmoe32 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gemma-floor-ncmoe24 | q36-full-c9000 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gemma-full-ncmoe0 | q36-floor-c2500 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gemma-full-ncmoe0 | q36-floor-ncmoe32 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gemma-full-ncmoe0 | q36-full-c9000 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| q36-floor-c2500 | q36-floor-ncmoe32 | 3/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| q36-floor-c2500 | q36-full-c9000 | 7/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| q36-floor-ncmoe32 | q36-full-c9000 | 3/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |

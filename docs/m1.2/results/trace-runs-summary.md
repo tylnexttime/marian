@@ -5,6 +5,6 @@
 
 Speed excludes requests that stopped within 8 tokens (counted here): i1-c9400 decode 1, i2-c9400 decode 1, i2-c9400 post 1
 
-| arm A | arm B | decode texts identical | top-3 probs identical | compared over |
-|---|---|---|---|---|
-| i1-c9400 | i2-c9400 | 10/10 | 10/10 | whole text |
+| arm A | arm B | decode texts identical | top-3 logprobs identical | max abs dlogprob, chosen token | compared over |
+|---|---|---|---|---|---|
+| i1-c9400 | i2-c9400 | 10/10 | not measured | - | whole text |

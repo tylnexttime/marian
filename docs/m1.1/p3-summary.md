@@ -11,33 +11,33 @@
 
 Speed excludes requests that stopped within 8 tokens (counted here): p3-r1-c9400 decode 1, p3-r1-c9400 post 1, p3-r1-c9400-ring decode 1, p3-r1-c9400-ring post 1, p3-r1-c9400-tier6g decode 1, p3-r1-c9400-tier6g post 1, p3-r1-stock34 decode 1, p3-r1-stock34 post 1, p3-r2-c9400 decode 1, p3-r2-c9400 post 1, p3-r2-c9400-ring decode 1, p3-r2-c9400-ring post 1, p3-r2-c9400-tier6g decode 1, p3-r2-c9400-tier6g post 1, p3-r2-stock34 decode 1, p3-r2-stock34 post 1
 
-| arm A | arm B | decode texts identical | top-3 probs identical | compared over |
-|---|---|---|---|---|
-| p3-r1-c9400 | p3-r1-c9400-ring | 10/10 | 10/10 | whole text |
-| p3-r1-c9400 | p3-r1-c9400-tier6g | 10/10 | 10/10 | whole text |
-| p3-r1-c9400 | p3-r1-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| p3-r1-c9400 | p3-r2-c9400 | 10/10 | 10/10 | whole text |
-| p3-r1-c9400 | p3-r2-c9400-ring | 10/10 | 10/10 | whole text |
-| p3-r1-c9400 | p3-r2-c9400-tier6g | 10/10 | 10/10 | whole text |
-| p3-r1-c9400 | p3-r2-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| p3-r1-c9400-ring | p3-r1-c9400-tier6g | 10/10 | 10/10 | whole text |
-| p3-r1-c9400-ring | p3-r1-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| p3-r1-c9400-ring | p3-r2-c9400 | 10/10 | 10/10 | whole text |
-| p3-r1-c9400-ring | p3-r2-c9400-ring | 10/10 | 10/10 | whole text |
-| p3-r1-c9400-ring | p3-r2-c9400-tier6g | 10/10 | 10/10 | whole text |
-| p3-r1-c9400-ring | p3-r2-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| p3-r1-c9400-tier6g | p3-r1-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| p3-r1-c9400-tier6g | p3-r2-c9400 | 10/10 | 10/10 | whole text |
-| p3-r1-c9400-tier6g | p3-r2-c9400-ring | 10/10 | 10/10 | whole text |
-| p3-r1-c9400-tier6g | p3-r2-c9400-tier6g | 10/10 | 10/10 | whole text |
-| p3-r1-c9400-tier6g | p3-r2-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| p3-r1-stock34 | p3-r2-c9400 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| p3-r1-stock34 | p3-r2-c9400-ring | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| p3-r1-stock34 | p3-r2-c9400-tier6g | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| p3-r1-stock34 | p3-r2-stock34 | 10/10 | 10/10 | whole text |
-| p3-r2-c9400 | p3-r2-c9400-ring | 10/10 | 10/10 | whole text |
-| p3-r2-c9400 | p3-r2-c9400-tier6g | 10/10 | 10/10 | whole text |
-| p3-r2-c9400 | p3-r2-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| p3-r2-c9400-ring | p3-r2-c9400-tier6g | 10/10 | 10/10 | whole text |
-| p3-r2-c9400-ring | p3-r2-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
-| p3-r2-c9400-tier6g | p3-r2-stock34 | 2/10 | 2/10 | shared prefix (lengths differ; texts compared by token id) |
+| arm A | arm B | decode texts identical | top-3 logprobs identical | max abs dlogprob, chosen token | compared over |
+|---|---|---|---|---|---|
+| p3-r1-c9400 | p3-r1-c9400-ring | 10/10 | not measured | - | whole text |
+| p3-r1-c9400 | p3-r1-c9400-tier6g | 10/10 | not measured | - | whole text |
+| p3-r1-c9400 | p3-r1-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| p3-r1-c9400 | p3-r2-c9400 | 10/10 | not measured | - | whole text |
+| p3-r1-c9400 | p3-r2-c9400-ring | 10/10 | not measured | - | whole text |
+| p3-r1-c9400 | p3-r2-c9400-tier6g | 10/10 | not measured | - | whole text |
+| p3-r1-c9400 | p3-r2-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| p3-r1-c9400-ring | p3-r1-c9400-tier6g | 10/10 | not measured | - | whole text |
+| p3-r1-c9400-ring | p3-r1-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| p3-r1-c9400-ring | p3-r2-c9400 | 10/10 | not measured | - | whole text |
+| p3-r1-c9400-ring | p3-r2-c9400-ring | 10/10 | not measured | - | whole text |
+| p3-r1-c9400-ring | p3-r2-c9400-tier6g | 10/10 | not measured | - | whole text |
+| p3-r1-c9400-ring | p3-r2-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| p3-r1-c9400-tier6g | p3-r1-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| p3-r1-c9400-tier6g | p3-r2-c9400 | 10/10 | not measured | - | whole text |
+| p3-r1-c9400-tier6g | p3-r2-c9400-ring | 10/10 | not measured | - | whole text |
+| p3-r1-c9400-tier6g | p3-r2-c9400-tier6g | 10/10 | not measured | - | whole text |
+| p3-r1-c9400-tier6g | p3-r2-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| p3-r1-stock34 | p3-r2-c9400 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| p3-r1-stock34 | p3-r2-c9400-ring | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| p3-r1-stock34 | p3-r2-c9400-tier6g | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| p3-r1-stock34 | p3-r2-stock34 | 10/10 | not measured | - | whole text |
+| p3-r2-c9400 | p3-r2-c9400-ring | 10/10 | not measured | - | whole text |
+| p3-r2-c9400 | p3-r2-c9400-tier6g | 10/10 | not measured | - | whole text |
+| p3-r2-c9400 | p3-r2-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| p3-r2-c9400-ring | p3-r2-c9400-tier6g | 10/10 | not measured | - | whole text |
+| p3-r2-c9400-ring | p3-r2-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| p3-r2-c9400-tier6g | p3-r2-stock34 | 2/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |

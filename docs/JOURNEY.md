@@ -18,8 +18,8 @@ and an NVMe model drive (`docs/design/RESEARCH-PACK.md`).
 
 **Where the numbers come from.** Files in this repository are cited by path. The result tables are copied into the
 repository as `docs/m1.0/*-summary.md`, `docs/m1.1/*-summary.md` (the gate pair on the M1.1 build is
-`docs/m1.1/gate11-summary.md`) and `docs/m1.1/probe/*.txt`, so a citation such as `m1.1/p3-summary.md` means
-`docs/m1.1/p3-summary.md`. Register entries (E34 to E41) are in the project's private test register; every number they
+`docs/m1.1/gate11-summary.md`), `docs/m1.2/results/` and `docs/m1.1/probe/*.txt`, so a citation such as `m1.1/p3-summary.md` means
+`docs/m1.1/p3-summary.md`. Register entries (E34 to E45) are in the project's private test register; every number they
 carry is also in a table here. Raw per-request logs and traces stay in the research workspace. Anything not verified is
 marked.
 
@@ -173,8 +173,8 @@ The surprises:
    in place instead of copying them over PCIe. **Where misses come from is the lever.**
 5. **Every arm slowed sharply after the 16K prompt** (4.2-5.4 tok/s, down by about a third to a half): prefill
    flushes the page cache that decode needs (corrected 24/10).
-6. **The cache broke exactness at 4,000 MiB.** Arms at 6,500 and 9,400 MiB gave identical greedy text and top-3
-   probabilities (10/10), as designed. At 4,000 MiB only 7/10 matched. The trace showed why: the three IQ1_M layers
+6. **The cache broke exactness at 4,000 MiB.** Arms at 6,500 and 9,400 MiB gave identical greedy text (10/10), as
+   designed. At 4,000 MiB only 7/10 matched. The trace showed why: the three IQ1_M layers
    form their own small cache group, which got 180 slots; three prompt chunks of 19-28 tokens select more experts than
    that, so upstream's capacity check sent them off the cache path, and below 32 tokens a host-resident expert is
    computed **on the CPU**. Three CPU-computed steps, three changed answers. This is C-24 and C-10 happening for real.
@@ -255,7 +255,8 @@ a 9,400 MiB cache:
   7.3 / 6.3 tok/s, the ring 12.4 / 12.0, the 6 GiB tier **14.7 / 14.0**; after a 16K prompt 5.0 / 4.6, 10.7 / 11.7
   and **14.8 / 14.4**. Stock was 8.6 / 11.0 warm and 4.2 / 3.8 after the long prompt. (First published as 14.2 / 13.8
   warm and 10.9 / 10.3 after the long prompt, before a one-token request was excluded.) **All three cache arms give
-  identical answers (10/10 texts and top-3 probabilities) within and across rounds.**
+  identical answers (10/10 texts) within and across rounds.** (Their probabilities were not actually recorded; section
+  6b, point 11.)
 - **Every speed prediction came in too low.** E39 predicted 8.3-9.5 tok/s for the ring and 9.5-11.5 for the tier.
   From upstream's path to the tier, host time per token fell by about 40 ms but token time by about 70 ms. Why the
   gain exceeds the host-time saving is unexplained; E40 records a guess, not a finding, that page faults stall more
@@ -298,7 +299,8 @@ cache arm matched the all-on-GPU arm 0/10, which would have contradicted the des
 design predicted identity, so the contradiction was worth reading token by token: the full arm had generated 256
 tokens and the cache arm 128, and the analysis compared whole texts. Over the shared prefix the cache arms (M1.0
 build, and M1.1 with memory-mapped and ring misses, at a different context size and under desktop RAM pressure)
-match the all-VRAM reference on **1,280 of 1,280 tokens and every top-3 probability**. This is the design's E2 test,
+match the all-VRAM reference on **1,280 of 1,280 tokens**. (We also wrote "and every top-3 probability"; point 11
+shows those had never been recorded, and then measures them.) This is the design's E2 test,
 the first evidence against the true reference rather than across budgets. The analyser now compares a shared prefix
 by token id and says so.
 
@@ -342,7 +344,8 @@ of [18.7, 10.9, 0] reports the slower real prompt. The analyser now leaves out r
 (and lists them), and reports a second figure that one prompt cannot swing: total tokens over total time. **Corrected,
 the 6 GiB tier measured 14.0-14.7 tok/s warm and 14.4-14.8 after a 16K prompt (median; 13.2-14.2 all-tokens), on two
 rounds: above the M1 exit's 12 on both.** Two rounds are not a claim under design 9.3, so a five-round interleaved
-confirmation against stock was started the same afternoon ([A21](#a21-the-five-round-confirmation)).
+confirmation against stock was started the same afternoon ([A21](#a21-the-five-round-confirmation)). It passed
+(point 10).
 
 **8. An outside user found two gaps in M0** (the planner). Alder, wiring Marian into another project as an optional
 planner, reported that a profile's VRAM peak includes whatever the desktop was using at the time, so a plan made on a
@@ -357,21 +360,51 @@ a shell substitution that collapsed Windows backslashes (redone with literal str
 `$r` that silently overwrote the research root `$R`, because PowerShell names are case-insensitive (the confirmation
 started ten empty runs in one second before it was caught; nothing reached the GPU).
 
+**10. The five-round confirmation: the decode exit is met** (E44, [A21](#a21-the-five-round-confirmation)). The rule
+was written into the register before any result was read: the tier meets the exit in a state only if every one of
+five rounds is at or above 12 tok/s, all-tokens rate. Interleaved against stock (T S | S T | T S | S T | T S), the
+6 GiB tier ran **14.4-14.6 tok/s warm and 13.4-13.7 right after a 16K prompt**, all ten values above 12, with a
+spread of 1-2% between its own rounds. Stock `-ncmoe 34` in the same rounds: 8.2-10.8 warm, 3.9-8.5 after the long
+prompt. So the tier is faster than stock in 5 of 5 rounds, about 1.5x warm and 3.4x after a long prompt. Its cost is
+just as consistent: stock reads a 16K prompt **4-5x faster** (141.8-155.0 tok/s against 29.7-34.4). The "3x" we had
+been quoting was against upstream's memory-mapped cache, not against stock.
+
+**11. The third analysis artefact: no probability had ever been recorded** (E44, E45,
+[A22](#a22-exactness-with-real-probabilities)). Reading the confirmation's exactness table, tier against stock showed
+2/10 identical, the same as every cache arm against stock since 22/10: stock computes 34 layers' experts on the CPU,
+which rounds differently, so it is not the exactness reference. But the per-token data showed something else: every
+"top-3" entry, in every run since 22/10, was `[[null], null]`. The request script read `top_probs` and `prob`; this
+llama.cpp sends `top_logprobs` and `logprob` (log-probabilities before sampling) unless asked otherwise, and in
+PowerShell `$null | ForEach-Object` runs once on null, so each empty answer was stored as a well-formed-looking
+record. Every "top-3 probabilities identical" in this journal and the README had compared nulls with nulls, a check
+that could not fail. Token ids were recorded correctly, so every token-identity result stands; the probability half
+had never been measured. The client now reads both shapes and stops with an error if a response carries no top-k;
+the analyser says "not measured" instead of "identical" and reports the largest log-probability difference. Then we
+measured it, with the rule registered first (E45). **The cache is exact to full float precision:** Gemma 4 26B's
+cache arms, with memory-mapped, ring and tier misses (hit rate 83%, so misses on every token), match the all-in-VRAM
+reference on all 1,280 tokens and every top-3 log-probability, largest difference 0; the reference against its own
+repeat, 0. Stock offload of the same model changes all 10 answers and moves log-probabilities by up to 0.59. That
+contrast matters twice: it shows the instrument can now fail, and it shows that "exact" is something Marian's cache
+has and stock layer offload does not.
+
 ## 7. What is next
 
 From `DESIGN-M1.md` section 10, reshaped by what M1.0 and M1.1 measured:
 
 - **Done on 24/10:** M1.1 (the exactness floor, P3's ring and tier, the trace-replay probe) and its exit check (replay
-  = server, +0.00 points); the controls; the Maya drive test; the M1.2 trace and replay (A19, A20).
+  = server, +0.00 points); the controls; the Maya drive test; the M1.2 trace and replay (A19, A20); the five-round
+  confirmation of the decode exit (A21); log-probability exactness against all-VRAM for every miss source (A22).
 - **The prefill cost of the tier is now the main obstacle to a default.** P3 covers decode only: prompts still fault
-  through the memory map, and the 6 GiB pinned tier takes the page cache they fault through (prefill about 3x slower).
+  through the memory map, and the 6 GiB pinned tier takes the page cache they fault through (prefill 4-5x slower than
+  stock, about 3x slower than upstream's cache path).
   Candidate fixes to measure: release or shrink the tier while a long prompt runs, give prefill its own unbuffered
   reads (the design's M2 expert source moved forward), or size the tier by need (M1.3).
 - **M1.2 as designed (a smarter VRAM policy) is deprioritised:** on the real trace every candidate loses to upstream's
   SLRU (A19). What survives from M1.2 is the tooling: the routing-id trace and the exact replay, which make every
   later policy or tier question answerable offline in a minute instead of on the GPU in an hour.
 - **Exactness, the rest of the way to the M1 exit:** the single-layer harness (E0) and the kernel-boundary parity
-  matrix, and logging full logits so "identical" can be bitwise rather than token and top-3.
+  matrix, and comparing full logits: the top-3 log-probabilities are now identical to full precision (A22), but the
+  whole vector is not logged, so bitwise is not claimed.
 - **M1.3, calibration v1:** probes with a safety envelope, a VRAM cliff finder, the plan, a live confirmation, a memory
   governor with supervised restart, one-sequence serving with clear refusals, learned counts, and `marian serve
   --stock` as the rollback. This is where "self-calibrating" stops being a goal and becomes code.
@@ -381,8 +414,8 @@ From `DESIGN-M1.md` section 10, reshaped by what M1.0 and M1.1 measured:
   (M4); prefill work, including bank lending and layer-major prefill (M5).
 
 **The open question for Chris.** M1's exit asks for at least 12 tok/s on Swift on the 16 GB reference laptop, warm
-and after a 16K prompt. On the corrected figures the P3 tier is above 12 in both states on two rounds; the five-round
-confirmation decides it (A21). But the use case that now drives the work is different: an 8 GB GPU beside a desktop
+and after a 16K prompt. The five-round confirmation says the P3 tier meets it in both states (14.4-14.6 warm,
+13.4-13.7 after a 16K prompt; A21), exactly (A22). But the use case that now drives the work is different: an 8 GB GPU beside a desktop
 that uses most of the RAM, with 4-30B models and prefill as important as decode. On that laptop stock llama.cpp
 already meets 20-30 tok/s. **Do we keep the M1 exit as written, or re-aim it at the laptop use case** (for example:
 beat the best stock placement on decode *and* prefill, in the 8 GB and 25 GB setting, for one named model)?
@@ -409,6 +442,8 @@ beat the best stock placement on decode *and* prefill, in the 8 GB and 25 GB set
 | 24/10 | M1.2's plan to raise the tier's share of misses | the exact replay showed no realistic policy gets there on 32 GB; the lever was the page cache, not the tier's share |
 | 24/10 | M0 profiles counted the desktop's VRAM as the model's; no packaging | per-row baseline, `--fit-now`, `--json`, `pyproject.toml` (found by an outside user) |
 | 24/10 | a PowerShell loop counter `$r` overwrote `$R` (names are case-insensitive) | caught in the first second, nothing ran; renamed |
+| 22-24/10 | no run ever recorded a probability (the client read field names this server does not send), so every "top-3 identical" compared nulls | client reads both shapes and refuses an empty top-k; analyser says "not measured"; measured: identical to full precision (E44, E45) |
+| 24/10 | "the tier costs prefill 3x" was against upstream's cache, not stock | against stock it is 4-5x (E44) |
 
 ---
 
@@ -554,7 +589,8 @@ the lever.
 
 #### A8. Answer identity in M1.0
 
-Conditions: greedy text and top-3 probabilities on the 10 decode prompts, pairs of A6 arms. Source:
+Conditions: greedy text on the 10 decode prompts, pairs of A6 arms (top-3 probabilities were requested but not
+recorded; A22). Source:
 `docs/m1.0/swift-summary.md`.
 
 | Pair | Identical |
@@ -606,12 +642,13 @@ the 8 GB VRAM ballast and no RAM ballast (free RAM minimum about 8 GiB); "full" 
 | gemma-full-ncmoe0 | 79.4 / 80.5 | 79.7 / 78.8 | 3,645.7 | - | - | - | 14,439 | 7.77 | 15.09 / 16.44 |
 
 Answer identity: the cache arm against the all-on-GPU arm, over the 128 tokens both generated (the full arm
-generated 256): **1,280 of 1,280 tokens identical, and every top-3 id and probability identical**, on all 10 prompts.
+generated 256): **1,280 of 1,280 tokens identical**, on all 10 prompts. (This entry first said "and every top-3 id
+and probability identical"; those were never recorded. A22 measures them on the M1.1 build: identical too.)
 The two M1.1 gate arms (memory-mapped and ring misses, ctx 20K, under 25 GiB of desktop pressure) match it the same
 way. Plain `-ncmoe 24` differs from both within 0-73 tokens (CPU rounding, as design section 3.2 predicts).
 Taught us: with RAM to hold the experts, the cache is 2.5x stock at 8 GB and only 8.5 ms of host time per token, and
-it is **exact against the true reference** (design E2) at token and top-3 level; bitwise logits are not logged, so
-bitwise is not claimed. A first version of this entry said "0/10, unexamined": the analysis compared whole texts of
+it is **exact against the true reference** (design E2) at token level, and A22 adds the top-3 log-probabilities;
+full logits are not logged, so bitwise is not claimed. A first version of this entry said "0/10, unexamined": the analysis compared whole texts of
 different length, a check that could not pass. Found because the result contradicted the design, then fixed (E41).
 
 #### A11. Gate arms: 8 GB GPU and about 25 GB of desktop RAM
@@ -669,10 +706,12 @@ laptop, no ballast. Sources: `m1.1/e1-summary.md`, `m1.1/e1-cross-summary.md`, r
 Speeds leave out the one decode request per arm that stops within 8 tokens (a first version of this table counted it
 as 0 tok/s; section 6b, point 7). All tokens = total tokens over total generation time.
 
-| Pair | Decode texts identical | Top-3 probabilities identical |
-|---|---|---|
-| e1-c4000 against e1-c9400 | **10/10** (M1.0: 7/10) | 10/10 |
-| e1-c9400 (M1.1 build) against r2-c9400 (M1.0 build) | 10/10 | 10/10 |
+| Pair | Decode texts identical |
+|---|---|
+| e1-c4000 against e1-c9400 | **10/10** (M1.0: 7/10) |
+| e1-c9400 (M1.1 build) against r2-c9400 (M1.0 build) | 10/10 |
+
+(A first version had a column "top-3 probabilities identical: 10/10"; it compared nulls, A22.)
 
 Also: the floor warning appeared in the 4,000 MiB log only; 23 multi-token steps in each of layers 0-46 in both arms
 (layer 47 has none because only the output row is computed there). Taught us: the floor makes the budget
@@ -779,11 +818,13 @@ over total generation time.
 Hit rate 90.8% / 80.4% and 69.3 MiB uploaded per token in every cache arm (the miss source changes where misses come
 from, not how many there are).
 
-| Pair | Decode texts identical | Top-3 probabilities identical |
-|---|---|---|
-| every pair of A, B and C arms, within and across rounds | 10/10 | 10/10 |
-| D with itself across rounds | 10/10 | 10/10 |
-| D against any cache arm | 2/10 | 2/10 |
+| Pair | Decode texts identical |
+|---|---|
+| every pair of A, B and C arms, within and across rounds | 10/10 |
+| D with itself across rounds | 10/10 |
+| D against any cache arm | 2/10 (D computes 34 layers' experts on the CPU) |
+
+(A first version had a top-3 probability column; it compared nulls, A22.)
 
 Scored against the prediction (E40, on the first, uncorrected figures): A in range for r1 and below it for r2; **B and
 C beat their ranges** (about 11.6 against 8.3-9.5; about 14.0 against 9.5-11.5; higher still after the correction); C's prefill about 3x slower at 16K, far worse than "equal or
@@ -806,7 +847,7 @@ already pulled misses at about 1.4 GB/s, the ring's own rate: 7-9 tok/s against 
 | gate11-gemma26-c2500-mmap | 8.1 / 8.1 | 12.0 / 10.6 | 122.6 | 199.9 | 83.3% / 66.2% | 117.3 | 0.61 / 59.92 | 15,274 | 0.13 | 6.8 / 9.64 |
 | gate11-gemma26-c2500-ring | **13.4 / 14.1** | 12.9 / 14.2 | 48.1 | 218.7 | 83.3% / 66.2% | 117.3 | 0.47 / 42.99 | 15,264 | 0.21 | 7.17 / 9.72 |
 
-Answer identity: 10/10 texts and top-3. Taught us: the prediction was wrong; memory-mapped misses under desktop
+Answer identity: 10/10 texts (probabilities not recorded; A22). Taught us: the prediction was wrong; memory-mapped misses under desktop
 pressure were not running at the ring's rate after all. But plain `-ncmoe 24` (15.0 on the M1.0 build, same
 conditions) still wins decode, and the ring more than halved 4K prefill. The hit rate is 83.3% against 87.5% on the
 M1.0 build at the same budget; a lead, not checked: the exactness floor changes how the budget splits between groups.
@@ -866,7 +907,7 @@ Conditions: build `build-m1.2` (M1.1 + patch 0004 + review fixes 0005); Swift IQ
 
 | Acceptance check | Result |
 |---|---|
-| answers, trace on (M1.2) against trace off (M1.1, e1-c9400) | **10/10 texts, 10/10 top-3** |
+| answers, trace on (M1.2) against trace off (M1.1, e1-c9400) | **10/10 texts** (top-3 not recorded; A22) |
 | replay against the server, S lines / fill steps | **107,008 / 107,008** and **58,110 / 58,110** identical |
 | replay minus server, median per-token hit | **+0.00 points** (M1.1 exit check: within 3) |
 | trace health | 4.10 MB, 107,221 records, 0 truncated, k = 10 throughout |
@@ -912,5 +953,51 @@ for prompt 1 in the tier arm), which is why the post-prefill figure needs more t
 
 Plan (design 9.3): tier 6 GiB (M1.1 build) against stock `-ncmoe 34` (M1.0 build), five rounds in the order
 T S | S T | T S | S T | T S, full phases, fresh process per run, resource log per run. Claim rule: the tier meets the
-12 tok/s exit in a state only if every round's all-tokens figure is at or above 12. Result: _to be filled in when the
-runs finish (about 18:30)_.
+12 tok/s exit in a state only if every round's all-tokens figure is at or above 12 (register E44, written before any
+result was read). Source: `docs/m1.2/results/confirm-summary.md`. All 10 servers came up and all 160 requests were
+answered; in every run one decode and one post-prefill request stop at once (EOS) and are left out, as the rule says.
+
+| Round | Tier decode | Stock decode | Ratio | Tier after 16K | Stock after 16K | Ratio | Prefill 16K, tier / stock |
+|---|---|---|---|---|---|---|---|
+| 1 (T S) | 14.5 | 10.8 | 1.34 | 13.4 | 3.9 | 3.44 | 29.7 / 144.4 |
+| 2 (S T) | 14.4 | 9.6 | 1.50 | 13.6 | 4.2 | 3.24 | 34.4 / 148.6 |
+| 3 (T S) | 14.6 | 8.2 | 1.78 | 13.4 | 3.9 | 3.44 | 31.2 / 155.0 |
+| 4 (S T) | 14.5 | 9.5 | 1.53 | 13.7 | 3.9 | 3.51 | 34.4 / 141.8 |
+| 5 (T S) | 14.6 | 8.2 | 1.78 | 13.5 | 8.5 | 1.59 | 30.3 / 154.8 |
+
+(tok/s, all-tokens rate; the tier's medians per request are 14.5-15.1 warm and 14.4-14.7 after 16K.) Hit rate 90.8%
+(10th percentile 80.4%) and 69.3 MiB uploaded per token in every tier run; the tier's runs agree with each other on
+all 10 answers.
+
+Taught us: **the M1 decode exit is met in both states**, in every round, with the tier's own spread at 1-2%. The tier
+beats stock in 5 of 5 rounds (median ratio 1.53 warm, 3.44 after 16K). Stock is the noisy arm (8.2-10.8 warm; after
+16K 3.9-4.2, except 8.5 in round 5, unexplained and kept). Prefill: stock is 4-5x faster at 16K and 4x at 4K.
+
+#### A22. Exactness with real probabilities
+
+Conditions: build-m1.1, no ballast, warm plus 10 decode prompts of 128 tokens, 3 log-probabilities per token
+(pre-sampling, recorded at full float precision), fixed client. Gemma 4 26B-A4B-it UD-IQ4_XS: F1 all experts in VRAM
+(`-ncmoe 0`); M cache `-ncmoe 30 --moe-cache-mib 2500` with memory-mapped misses; T the same with a 4 GiB tier; R the
+same with the ring; C stock `-ncmoe 24`; F2 = F1 again. Swift: SM cache 9,400 MiB memory-mapped; ST with the 6 GiB
+tier; SS stock `-ncmoe 34`. Rule registered first (E45). Sources: `docs/m1.2/results/exact/`.
+
+| Pair | Texts identical | Top-3 log-probabilities identical | Largest log-probability difference, chosen token |
+|---|---|---|---|
+| Gemma F1 against F2 (the reference against itself) | 10/10 | 10/10 | 0 |
+| Gemma M (memory-mapped misses) against F1 | 10/10 | 10/10 | 0 |
+| Gemma T (tier misses) against F1 | 10/10 | 10/10 | 0 |
+| Gemma R (ring misses) against F1 | 10/10 | 10/10 | 0 |
+| Gemma C (stock, CPU experts) against F1 | 0/10 | 0/10 | 0.59 |
+| Swift ST (tier) against SM (memory-mapped) | 10/10 | 10/10 | 0 |
+| Swift SS (stock) against SM | 4/10 | 0/10 | 0.337 |
+
+The Gemma cache arms ran at hit rate 83.3% (10th percentile 66.2%) and 117 MiB uploaded per token, so every token
+went through the miss path being tested. A side result, from these unpressured runs: with RAM free and the page cache
+warm, Gemma decoded at 34.0 tok/s with memory-mapped misses, 23.5 with the tier and 12.2 with the ring (82.8 all in
+VRAM, 12.9 stock); the ring's unbuffered reads skip a page cache that, here, already held the experts. That is why the
+ring and tier are opt-in and calibration has to choose them per machine.
+
+Taught us: **the cache is exact against the true reference to full float precision, for every miss source**; the
+prediction (difference exactly 0) was right, and the stock contrast was 30-60x larger than the 0.01 we guessed. The
+contrast is also what makes the result worth something: the same instrument that reads 0 for the cache reads up to
+0.59 for stock. Not shown: the full logit vector (only the top 3 are recorded).

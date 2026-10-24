@@ -57,7 +57,14 @@ def arm_summary(tag, runs):
         rs = [r for r in req if r["phase"] == ph and r.get("ok")]
         if not rs:
             continue
-        d = {"n": len(rs), "gen_tps_median": st.median(r["gen_tps"] for r in rs),
+        # A request that stops within 8 tokens (decode prompt 2 ends at EOS after one token, gen_tps 0, in every arm) says
+        # nothing about decode speed: counted, but kept out of the speed figures (found 24/10/2026: with only three
+        # post-prefill prompts, its 0 made "post-pp16K tok/s" the speed of one slow prompt). Two speed figures: the median
+        # over requests, and the all-tokens rate (total tokens / total generation time), which one prompt cannot swing.
+        ok = [r for r in rs if (r.get("gen_n") or 0) >= 8 and (r.get("gen_tps") or 0) > 0]
+        d = {"n": len(rs), "n_short": len(rs) - len(ok),
+             "gen_tps_median": st.median(r["gen_tps"] for r in ok) if ok else None,
+             "gen_tps_tokens": (sum(r["gen_n"] for r in ok) / sum(r["gen_n"] / r["gen_tps"] for r in ok)) if ok else None,
              "prompt_tps_median": st.median(r["prompt_tps"] for r in rs), "prompt_n": sum(r["prompt_n"] for r in rs),
              "gen_n": sum(r["gen_n"] for r in rs)}
         sl = [x for x in s if any(r["t0_us"] <= x["t_us"] <= r["t1_us"] for r in rs)]
@@ -95,25 +102,55 @@ def main():
     runs = Path(sys.argv[1]); md = Path(sys.argv[2]) if len(sys.argv) > 2 else None
     tags = sorted({p.name[:-len(".requests.jsonl")] for p in runs.glob("*.requests.jsonl")})
     arms = [arm_summary(t, runs) for t in tags]
-    lines = ["| arm | decode tok/s | post-pp16K tok/s | pp4k tok/s | pp16K tok/s | hit median / p10 | MiB up/token | wait / host ms per token | VRAM peak | free RAM min | peak WS / commit GiB |",
+    lines = ["| arm | decode tok/s: median / all tokens | post-pp16K tok/s: median / all tokens | pp4k tok/s | pp16K tok/s | hit median / p10 | MiB up/token | wait / host ms per token | VRAM peak | free RAM min | peak WS / commit GiB |",
              "|---|---|---|---|---|---|---|---|---|---|---|"]
+    short = []
     for a in arms:
         P = a["phases"]; dc = P.get("decode", {}); po = P.get("post", {}); r = a.get("res", {}); pr = a["proc"]
         g = lambda d, k, fmt="{:.1f}": (fmt.format(d[k]) if d.get(k) is not None else "-")
-        lines.append(f"| {a['tag']} | {g(dc,'gen_tps_median')} | {g(po,'gen_tps_median')} | {g(P.get('pp4k',{}),'prompt_tps_median')} | "
+        two = lambda d: "-" if not d else f"{g(d,'gen_tps_median')} / {g(d,'gen_tps_tokens')}"
+        short += [f"{a['tag']} {ph} {P[ph]['n_short']}" for ph in ("decode", "post") if P.get(ph, {}).get("n_short")]
+        lines.append(f"| {a['tag']} | {two(dc)} | {two(po)} | {g(P.get('pp4k',{}),'prompt_tps_median')} | "
                      f"{g(P.get('pp16k',{}),'prompt_tps_median')} | {g(dc,'hit_median','{:.1%}')} / {g(dc,'hit_p10','{:.1%}')} | "
                      f"{g(dc,'mib_up_per_token')} | {g(dc,'ms_wait_per_token','{:.2f}')} / {g(dc,'ms_host_per_token','{:.2f}')} | "
                      f"{g(r,'vram_peak_mib','{:.0f}')} | {g(r,'free_ram_min_gib','{:.2f}')} | {pr.get('peak_working_set_gib','-')} / {pr.get('peak_private_commit_gib','-')} |")
-    # exactness: compare decode text and top-3 probabilities between every pair of arms
-    ex = ["", "| arm A | arm B | decode texts identical | top-3 probs identical |", "|---|---|---|---|"]
+    # exactness: compare decode text and top-3 probabilities between every pair of arms. When two arms generated
+    # different lengths (e.g. DecodeN 256 against 128), compare the shared prefix and say so: a whole-text compare
+    # would report 0/10 for identical outputs (found 24/10/2026 on the Gemma controls).
+    # Top-3 entries recorded before 24/10/2026 are [[null], null] (the client read fields this server does not send), so
+    # a probability compare counts only records whose top-k carries numbers, and says "not measured" otherwise: an
+    # equality of nulls is a test that cannot fail. max |dlp| is the largest log-probability difference, over the
+    # shared prefix, of the token both arms chose (0 when they agree bit for bit at the printed precision).
+    real = lambda ps: bool(ps) and all(isinstance(x.get("lp"), (int, float)) and x.get("top") and
+                                       all(isinstance(e, list) and len(e) == 2 and isinstance(e[1], (int, float)) for e in x["top"]) for x in ps)
+    ex = ["", "| arm A | arm B | decode texts identical | top-3 logprobs identical | max abs dlogprob, chosen token | compared over |",
+          "|---|---|---|---|---|---|"]
     for i in range(len(arms)):
         for j in range(i + 1, len(arms)):
             A, B = arms[i], arms[j]
             ks = sorted(set(A["decode_text"]) & set(B["decode_text"]))
-            same_t = sum(A["decode_text"][k] == B["decode_text"][k] for k in ks)
-            same_p = sum(A["decode_probs"].get(k) == B["decode_probs"].get(k) for k in ks)
-            ex.append(f"| {A['tag']} | {B['tag']} | {same_t}/{len(ks)} | {same_p}/{len(ks)} |")
-    text = "\n".join(lines + ex) + "\n"
+            same_t = same_p = n_real = 0; prefix = False; dmax = None
+            for k in ks:
+                pa, pb = A["decode_probs"].get(k) or [], B["decode_probs"].get(k) or []
+                n = min(len(pa), len(pb))
+                if len(pa) != len(pb):
+                    prefix = True
+                    same_t += [x.get("id") for x in pa[:n]] == [x.get("id") for x in pb[:n]]
+                else:
+                    same_t += A["decode_text"][k] == B["decode_text"][k]
+                if real(pa[:n]) and real(pb[:n]):
+                    n_real += 1
+                    same_p += [(x["id"], x["lp"], x["top"]) for x in pa[:n]] == [(x["id"], x["lp"], x["top"]) for x in pb[:n]]
+                    for x, y in zip(pa[:n], pb[:n]):
+                        if x["id"] != y["id"]:
+                            break  # past the first divergence the two arms are scoring different texts
+                        d = abs(x["lp"] - y["lp"]); dmax = d if dmax is None else max(dmax, d)
+            over = "shared prefix (lengths differ; texts compared by token id)" if prefix else "whole text"
+            pcell = f"{same_p}/{n_real}" if n_real else "not measured"
+            dcell = "-" if dmax is None else f"{dmax:.3g}"
+            ex.append(f"| {A['tag']} | {B['tag']} | {same_t}/{len(ks)} | {pcell} | {dcell} | {over} |")
+    note = ["", "Speed excludes requests that stopped within 8 tokens (counted here): " + (", ".join(short) if short else "none")]
+    text = "\n".join(lines + note + ex) + "\n"
     print(text)
     (runs / "summary.json").write_text(json.dumps([{k: v for k, v in a.items() if not k.startswith("decode_")} for a in arms], indent=1), encoding="utf-8")
     if md:

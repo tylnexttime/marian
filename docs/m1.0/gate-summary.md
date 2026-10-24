@@ -13,50 +13,50 @@
 
 Speed excludes requests that stopped within 8 tokens (counted here): none
 
-| arm A | arm B | decode texts identical | top-3 probs identical | compared over |
-|---|---|---|---|---|
-| gate-bolt-e4b-full | gate-e4b-qat-full | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-bolt-e4b-full | gate-gemma26-c2500-desk25 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-bolt-e4b-full | gate-gemma26-iq3xxs-c2500 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-bolt-e4b-full | gate-gemma26-iq3xxs-ncmoe18 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-bolt-e4b-full | gate-gemma26-ncmoe24-desk25 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-bolt-e4b-full | gate-gemma26-ncmoe30-desk25 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-bolt-e4b-full | gate-groot-c2500 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-bolt-e4b-full | gate-groot-ncmoe28 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-bolt-e4b-full | gate-qwen35-9b-full | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-e4b-qat-full | gate-gemma26-c2500-desk25 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-e4b-qat-full | gate-gemma26-iq3xxs-c2500 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-e4b-qat-full | gate-gemma26-iq3xxs-ncmoe18 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-e4b-qat-full | gate-gemma26-ncmoe24-desk25 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-e4b-qat-full | gate-gemma26-ncmoe30-desk25 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-e4b-qat-full | gate-groot-c2500 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-e4b-qat-full | gate-groot-ncmoe28 | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-e4b-qat-full | gate-qwen35-9b-full | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-gemma26-c2500-desk25 | gate-gemma26-iq3xxs-c2500 | 0/10 | 0/10 | whole text |
-| gate-gemma26-c2500-desk25 | gate-gemma26-iq3xxs-ncmoe18 | 0/10 | 0/10 | whole text |
-| gate-gemma26-c2500-desk25 | gate-gemma26-ncmoe24-desk25 | 0/10 | 0/10 | whole text |
-| gate-gemma26-c2500-desk25 | gate-gemma26-ncmoe30-desk25 | 0/10 | 0/10 | whole text |
-| gate-gemma26-c2500-desk25 | gate-groot-c2500 | 0/10 | 0/10 | whole text |
-| gate-gemma26-c2500-desk25 | gate-groot-ncmoe28 | 0/10 | 0/10 | whole text |
-| gate-gemma26-c2500-desk25 | gate-qwen35-9b-full | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-gemma26-iq3xxs-c2500 | gate-gemma26-iq3xxs-ncmoe18 | 0/10 | 0/10 | whole text |
-| gate-gemma26-iq3xxs-c2500 | gate-gemma26-ncmoe24-desk25 | 0/10 | 0/10 | whole text |
-| gate-gemma26-iq3xxs-c2500 | gate-gemma26-ncmoe30-desk25 | 0/10 | 0/10 | whole text |
-| gate-gemma26-iq3xxs-c2500 | gate-groot-c2500 | 0/10 | 0/10 | whole text |
-| gate-gemma26-iq3xxs-c2500 | gate-groot-ncmoe28 | 0/10 | 0/10 | whole text |
-| gate-gemma26-iq3xxs-c2500 | gate-qwen35-9b-full | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-gemma26-iq3xxs-ncmoe18 | gate-gemma26-ncmoe24-desk25 | 0/10 | 0/10 | whole text |
-| gate-gemma26-iq3xxs-ncmoe18 | gate-gemma26-ncmoe30-desk25 | 0/10 | 0/10 | whole text |
-| gate-gemma26-iq3xxs-ncmoe18 | gate-groot-c2500 | 0/10 | 0/10 | whole text |
-| gate-gemma26-iq3xxs-ncmoe18 | gate-groot-ncmoe28 | 0/10 | 0/10 | whole text |
-| gate-gemma26-iq3xxs-ncmoe18 | gate-qwen35-9b-full | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-gemma26-ncmoe24-desk25 | gate-gemma26-ncmoe30-desk25 | 4/10 | 4/10 | whole text |
-| gate-gemma26-ncmoe24-desk25 | gate-groot-c2500 | 0/10 | 0/10 | whole text |
-| gate-gemma26-ncmoe24-desk25 | gate-groot-ncmoe28 | 0/10 | 0/10 | whole text |
-| gate-gemma26-ncmoe24-desk25 | gate-qwen35-9b-full | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-gemma26-ncmoe30-desk25 | gate-groot-c2500 | 0/10 | 0/10 | whole text |
-| gate-gemma26-ncmoe30-desk25 | gate-groot-ncmoe28 | 0/10 | 0/10 | whole text |
-| gate-gemma26-ncmoe30-desk25 | gate-qwen35-9b-full | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-groot-c2500 | gate-groot-ncmoe28 | 2/10 | 2/10 | whole text |
-| gate-groot-c2500 | gate-qwen35-9b-full | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
-| gate-groot-ncmoe28 | gate-qwen35-9b-full | 0/10 | 0/10 | shared prefix (lengths differ; texts compared by token id) |
+| arm A | arm B | decode texts identical | top-3 logprobs identical | max abs dlogprob, chosen token | compared over |
+|---|---|---|---|---|---|
+| gate-bolt-e4b-full | gate-e4b-qat-full | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-bolt-e4b-full | gate-gemma26-c2500-desk25 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-bolt-e4b-full | gate-gemma26-iq3xxs-c2500 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-bolt-e4b-full | gate-gemma26-iq3xxs-ncmoe18 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-bolt-e4b-full | gate-gemma26-ncmoe24-desk25 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-bolt-e4b-full | gate-gemma26-ncmoe30-desk25 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-bolt-e4b-full | gate-groot-c2500 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-bolt-e4b-full | gate-groot-ncmoe28 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-bolt-e4b-full | gate-qwen35-9b-full | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-e4b-qat-full | gate-gemma26-c2500-desk25 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-e4b-qat-full | gate-gemma26-iq3xxs-c2500 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-e4b-qat-full | gate-gemma26-iq3xxs-ncmoe18 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-e4b-qat-full | gate-gemma26-ncmoe24-desk25 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-e4b-qat-full | gate-gemma26-ncmoe30-desk25 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-e4b-qat-full | gate-groot-c2500 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-e4b-qat-full | gate-groot-ncmoe28 | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-e4b-qat-full | gate-qwen35-9b-full | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-gemma26-c2500-desk25 | gate-gemma26-iq3xxs-c2500 | 0/10 | not measured | - | whole text |
+| gate-gemma26-c2500-desk25 | gate-gemma26-iq3xxs-ncmoe18 | 0/10 | not measured | - | whole text |
+| gate-gemma26-c2500-desk25 | gate-gemma26-ncmoe24-desk25 | 0/10 | not measured | - | whole text |
+| gate-gemma26-c2500-desk25 | gate-gemma26-ncmoe30-desk25 | 0/10 | not measured | - | whole text |
+| gate-gemma26-c2500-desk25 | gate-groot-c2500 | 0/10 | not measured | - | whole text |
+| gate-gemma26-c2500-desk25 | gate-groot-ncmoe28 | 0/10 | not measured | - | whole text |
+| gate-gemma26-c2500-desk25 | gate-qwen35-9b-full | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-gemma26-iq3xxs-c2500 | gate-gemma26-iq3xxs-ncmoe18 | 0/10 | not measured | - | whole text |
+| gate-gemma26-iq3xxs-c2500 | gate-gemma26-ncmoe24-desk25 | 0/10 | not measured | - | whole text |
+| gate-gemma26-iq3xxs-c2500 | gate-gemma26-ncmoe30-desk25 | 0/10 | not measured | - | whole text |
+| gate-gemma26-iq3xxs-c2500 | gate-groot-c2500 | 0/10 | not measured | - | whole text |
+| gate-gemma26-iq3xxs-c2500 | gate-groot-ncmoe28 | 0/10 | not measured | - | whole text |
+| gate-gemma26-iq3xxs-c2500 | gate-qwen35-9b-full | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-gemma26-iq3xxs-ncmoe18 | gate-gemma26-ncmoe24-desk25 | 0/10 | not measured | - | whole text |
+| gate-gemma26-iq3xxs-ncmoe18 | gate-gemma26-ncmoe30-desk25 | 0/10 | not measured | - | whole text |
+| gate-gemma26-iq3xxs-ncmoe18 | gate-groot-c2500 | 0/10 | not measured | - | whole text |
+| gate-gemma26-iq3xxs-ncmoe18 | gate-groot-ncmoe28 | 0/10 | not measured | - | whole text |
+| gate-gemma26-iq3xxs-ncmoe18 | gate-qwen35-9b-full | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-gemma26-ncmoe24-desk25 | gate-gemma26-ncmoe30-desk25 | 4/10 | not measured | - | whole text |
+| gate-gemma26-ncmoe24-desk25 | gate-groot-c2500 | 0/10 | not measured | - | whole text |
+| gate-gemma26-ncmoe24-desk25 | gate-groot-ncmoe28 | 0/10 | not measured | - | whole text |
+| gate-gemma26-ncmoe24-desk25 | gate-qwen35-9b-full | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-gemma26-ncmoe30-desk25 | gate-groot-c2500 | 0/10 | not measured | - | whole text |
+| gate-gemma26-ncmoe30-desk25 | gate-groot-ncmoe28 | 0/10 | not measured | - | whole text |
+| gate-gemma26-ncmoe30-desk25 | gate-qwen35-9b-full | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-groot-c2500 | gate-groot-ncmoe28 | 2/10 | not measured | - | whole text |
+| gate-groot-c2500 | gate-qwen35-9b-full | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
+| gate-groot-ncmoe28 | gate-qwen35-9b-full | 0/10 | not measured | - | shared prefix (lengths differ; texts compared by token id) |
