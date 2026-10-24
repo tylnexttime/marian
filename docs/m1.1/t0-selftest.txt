@@ -1,0 +1,6 @@
+llama_moe_source: Marian P3 (experimental) tier: ring 5 x 1.46 MiB, tier slots per group: 32 10 2, 68.99 MiB pinned, sector 4096, unbuffered reads, verified against the memory map
+llama_moe_source: 4335 misses: 705 from the tier (16.3%), 96 admitted, 3534 through the ring, 4.48 GiB read, 541 ring wraps, 0 failed reads, 0 mismatches
+llama_moe_source: 4335 misses: 705 from the tier (16.3%), 96 admitted, 3534 through the ring, 4.48 GiB read, 541 ring wraps, 0 failed reads, 0 mismatches
+48 layers in 3 groups, 512 experts, banks 248 MiB (64 slots per group)
+fills: tier 705, admitted 96, ring 3534; 13005 expert tensors checked against the memory map, 0 mismatched
+SELFTEST PASS

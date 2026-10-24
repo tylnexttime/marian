@@ -14,9 +14,12 @@ IQ2_XS quantisation of Qwen3.8-Flash-Next (48 layers, 512 experts, 10 used per t
 "The reference laptop" has an RTX 4090 Laptop GPU with 16 GB of VRAM, an i7-13700HX, 32 GB of DDR5-4800, Windows 11
 and an NVMe model drive (`docs/design/RESEARCH-PACK.md`).
 
-**Where the numbers come from.** Files in this repository are cited by path. Some results are still in the research
-workspace or in the project's test register and have not been copied here yet; those are cited by file name (for
-example `m1.1/p3-summary.md`) or register entry (E34 to E39). Anything not verified is marked.
+**Where the numbers come from.** Files in this repository are cited by path. The result tables are copied into the
+repository as `docs/m1.0/*-summary.md`, `docs/m1.1/*-summary.md` (the gate pair on the M1.1 build is
+`docs/m1.1/gate11-summary.md`) and `docs/m1.1/probe/*.txt`, so a citation such as `m1.1/p3-summary.md` means
+`docs/m1.1/p3-summary.md`. Register entries (E34 to E41) are in the project's private test register; every number they
+carry is also in a table here. Raw per-request logs and traces stay in the research workspace. Anything not verified is
+marked.
 
 ---
 
@@ -474,9 +477,12 @@ summary. Source: `m1.0/swift-summary.md` (24/10 version, research workspace).
 | f1-stock45 | 7.7 | 5.6 | 27.0 | 30.5 | - | - | - | 15,623 | 0.08 | 22.66 / 13.01 |
 | f2-stock45 | 7.5 | 5.8 | 27.9 | 27.7 | - | - | - | 15,881 | 0.10 | 22.67 / 13.05 |
 
-Answer identity: each arm 10/10 with its other round; cache against stock 4/10; either against any A6 arm 1/10.
-Taught us: Swift is not an 8 GB model on either path; the 2,400 MiB arms predate the floor, so their 1/10 against the
-16 GB cache arms is the same capacity bug, not a new one.
+Answer identity: each arm 10/10 with its other round; cache against stock 4/10. Against the A6 arms, compared over
+the 128 tokens both generated (the A6 arms generated 256): cache 2,400 against 4,000 MiB 5/10 and against 6,500 or
+9,400 MiB 2/10; stock 45 against stock 34 6/10. (A first version of this table said 1/10 for all of these: the
+analysis compared whole texts of different length. Fixed 24/10; see register E41.)
+Taught us: Swift is not an 8 GB model on either path; the 2,400 MiB arms predate the floor, so their differences from
+the 16 GB cache arms are the same capacity bug (prompt steps on the CPU), not a new one.
 
 #### A10. Controls: Gemma 4 26B-A4B at 8 GB, RAM free
 
@@ -490,10 +496,14 @@ the 8 GB VRAM ballast and no RAM ballast (free RAM minimum about 8 GiB); "full" 
 | gemma-floor-ncmoe24 | 16.8 | 19.8 | 700.8 | - | - | - | 14,802 | 8.06 | 14.73 / 8.33 |
 | gemma-full-ncmoe0 | 79.4 | 79.7 | 3,645.7 | - | - | - | 14,439 | 7.77 | 15.09 / 16.44 |
 
-Answer identity: 0/10 for every pair. Taught us: with RAM to hold the experts, the cache is 2.5x stock at 8 GB and
-only 8.5 ms of host time per token. **Open:** the cache arm against the all-on-GPU arm should be identical by the
-design's definition of exact, and it matched 0/10; this has not been examined (the arms also differ in ballast and
-prefill path), so exactness against an all-on-GPU reference is unproven.
+Answer identity: the cache arm against the all-on-GPU arm, over the 128 tokens both generated (the full arm
+generated 256): **1,280 of 1,280 tokens identical, and every top-3 id and probability identical**, on all 10 prompts.
+The two M1.1 gate arms (memory-mapped and ring misses, ctx 20K, under 25 GiB of desktop pressure) match it the same
+way. Plain `-ncmoe 24` differs from both within 0-73 tokens (CPU rounding, as design section 3.2 predicts).
+Taught us: with RAM to hold the experts, the cache is 2.5x stock at 8 GB and only 8.5 ms of host time per token, and
+it is **exact against the true reference** (design E2) at token and top-3 level; bitwise logits are not logged, so
+bitwise is not claimed. A first version of this entry said "0/10, unexamined": the analysis compared whole texts of
+different length, a check that could not pass. Found because the result contradicted the design, then fixed (E41).
 
 #### A11. Gate arms: 8 GB GPU and about 25 GB of desktop RAM
 
@@ -689,9 +699,28 @@ These two sections are placeholders, to be filled in when the runs finish.
 
 #### Controls: Coder IQ1_M, Qwen3.6-35B-A3B, Qwen3.8-27B dense
 
-Plan (`docs/m1.0/M1.0-STATUS.md` section 4): Qwen3.8-Flash-Next GSQ-RCO Coder IQ1_M (full, floor cache, floor stock),
-Qwen3.6-35B-A3B (full, floor cache, floor stock), Qwen3.8-27B dense (full, floor `-ngl 40`). No pre-registered
-prediction. Result: _to be filled in_.
+Conditions: M1.0 build; "floor" = 8 GB VRAM ballast, no RAM ballast; "full" = the whole 16 GB GPU. Coder (the
+Qwen3.8-Flash-Next GSQ-RCO IQ1_M download) ctx 20K with all phases; Qwen3.6-35B-A3B UD-Q4_K_XL and Qwen3.8-27B dense
+UD-Q3_K_XL ctx 16K without the 16K prompt. Floor arms 128 decode tokens, full arms 256. No pre-registered prediction.
+Source: `m1.0/controls-summary.md`; register E41.
+
+| Arm | Decode | After 16K prompt | Prefill 4K | Prefill 16K | Hit median / p10 | MiB up per token | Host ms per token: wait / after | Free RAM min GiB |
+|---|---|---|---|---|---|---|---|---|
+| coder-full-c9400 | 13.0 | 6.4 | 97.8 | 181.2 | 91.0% / 80.0% | 96.6 | 0.87 / 42.11 | 0.22 |
+| coder-floor-c2400 | **7.1** | **7.5** | 52.8 | 122.5 | 57.9% / 41.0% | 402.8 | 0.92 / 95.71 | 0.15 |
+| coder-floor-ncmoe45 | 6.5 | 2.8 | 88.7 | 103.7 | - | - | - | 0.21 |
+| q36-full-c9000 | 43.3 | 37.3 | 367.3 | - | 95.9% / 88.4% | 31.6 | 0.58 / 4.75 | 0.30 |
+| q36-floor-c2500 | **15.5** | 18.2 | 181.6 | - | 70.6% / 51.2% | 181.4 | 0.81 / 38.07 | 0.23 |
+| q36-floor-ncmoe32 | 13.1 | **23.8** | **270.2** | - | - | - | - | 0.24 |
+| dense27-full | 29.5 | 29.8 | 1,234.2 | - | - | - | - | 4.77 |
+| dense27-floor-ngl40 | 2.2 | 2.2 | 415.4 | - | - | - | - | 2.18 |
+
+Answer identity (shared prefix): cache against stock at the floor 3/10 for both Coder and Qwen3.6 (stock computes
+CPU-layer experts on the CPU, so it is not a reference; these cache arms are the M1.0 build, before the floor).
+Taught us: **the cache's value at 8 GB depends on the model.** Coder: cache ahead on decode and far ahead after a long
+prompt (7.5 against 2.8). Qwen3.6: cache 18% ahead on decode, but plain offload wins after the long prompt and on
+prefill. Dense 27B: not an 8 GB model at all (2.2 tok/s), which is the case mixture-of-experts models exist to avoid.
+So the right setting is a per-machine, per-model measurement, which is M1.3's calibration job.
 
 #### Maya C: vs E:
 

@@ -161,10 +161,12 @@ Be warned; this is research code.
   (it then falls back to pageable memory and says so).
 - **The M1 decode target is not met.** M1's exit asks for at least 12 tok/s on the reference laptop both warm and
   right after a 16K prompt. The tier arm reaches 13.8-14.2 warm but 10.3-10.9 after the long prompt.
-- **Exactness is proved narrowly.** Answers are identical across cache budgets and miss sources (10/10 greedy texts
-  and top-3 probabilities). Not yet done: the single-layer harness and the kernel-boundary parity matrix the design
-  requires; for the Swift model a literal all-in-VRAM reference cannot fit on this GPU at all (C-09); and one Gemma
-  comparison against an all-on-GPU run matched 0/10 and has not been examined yet.
+- **Exactness is proved at token level, not yet bitwise.** Answers are identical across cache budgets and miss sources
+  (10/10 greedy texts and top-3 probabilities). Against the true reference, every expert in VRAM, Gemma 4 26B-A4B's
+  cache arms (old and new build, memory-mapped and ring miss sources) match on 1,280 of 1,280 generated tokens and on
+  every top-3 probability. Not yet done: bitwise logit comparison, the single-layer harness and the kernel-boundary
+  parity matrix the design requires; for the Swift model a literal all-in-VRAM reference cannot fit on this GPU at all
+  (C-09).
 - **The miss-path probe overstated its baseline.** The replay probe's memory-mapped pass ran 23% to 1.9x slower than
   the real server, so its ratios flattered the ring and the tier.
 - **No routing profile, no held-out split, no learning yet.** The hit rates are upstream SLRU's, warming over a fixed

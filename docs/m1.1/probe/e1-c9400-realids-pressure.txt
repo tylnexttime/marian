@@ -1,0 +1,31 @@
+model: 2 shard(s), 48 MoE layers, 33.02 GiB of routed experts, n_expert_used 10
+trace: 107008 S lines, 2163 steps replayed (2144 decode tokens, 19 prompt steps), phases decode
+fills: 47693 S lines without matching F lines get synthetic ids
+ids: 1488 S lines with SYNTHETIC expert ids (zipf 1.20, VRAM-resident share 27.8% of each layer)
+split: tier ranked on the first 1081 steps, statistics over the remaining 1082
+tier: 4580 experts, 6143 MiB of 6144 MiB (training-window counts ranking)
+ring: 43 slots of 1531904 bytes pinned, sector 4096, queue depth 8, unbuffered reads
+tier fill: 4580 experts, 6400 MiB pinned, read 6.05 GiB in 4.0 s (1.64 GB/s incl. pinning)
+memory: held 14.00 GiB of private memory, 2.12 GiB available now (asked to leave 2.00)
+
+pass mmap: 2.12 GiB available at start
+pass mmap: 395.8 s, 22916621 page faults (soft and hard), 0.24 GiB available at end
+
+pass ring: 0.24 GiB available at start
+pass ring: 129.4 s, 17701 page faults (soft and hard), 0.37 GiB available at end
+
+pass tier: 0.37 GiB available at start
+pass tier: 92.2 s, 436 page faults (soft and hard), 0.54 GiB available at end
+
+SYNTHETIC ids; per decode token = the sum over its layer steps of host time from the first upload to the stream sync
+| source | tokens | MiB/token | ms/token median | p10 | p90 | GB/s (median bytes / median time) | tier share fills / bytes | read GiB | prompt steps: GiB, s, GB/s |
+|---|---|---|---|---|---|---|---|---|---|
+| mmap | 1074 | 63.0 | 132.05 | 46.63 | 286.15 | 0.50 | - | 0.00 | 12.46, 34.9, 0.38 |
+| ring | 1074 | 63.0 | 46.96 | 18.03 | 94.78 | 1.41 | - | 88.61 | 12.46, 8.7, 1.54 |
+| tier | 1074 | 63.0 | 35.94 | 13.99 | 71.67 | 1.84 | 26% / 26% | 65.26 | 12.46, 6.6, 2.03 |
+
+linear model from the ring and tier passes: ring 1.42 GB/s, tier-resident 16.05 GB/s per miss byte; at 63.0 MiB/token:
+| tier share of miss bytes | 0% | 25% | 50% | 75% | 90% | 100% |
+|---|---|---|---|---|---|---|
+| ms per token | 46.7 | 36.0 | 25.4 | 14.8 | 8.4 | 4.1 |
+DONE
