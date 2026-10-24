@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "marian"
+version = "0.1.0"
+description = "Run local mixture-of-experts LLMs by what your machine can actually do: a measured planner, plus exact per-expert VRAM tiering for llama.cpp"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "tylnexttime (Chris Tyl and Claude Tyl)" }]
+dependencies = []
+
+[project.scripts]
+marian = "marian.cli:main"
+
+[tool.setuptools]
+packages = ["marian"]

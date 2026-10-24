@@ -228,10 +228,19 @@ python -m marian machine                                   # GPU, VRAM, RAM, dri
 python -m marian inspect model.gguf                        # architecture, layers, experts, MoE or dense
 python -m marian profile model.gguf --engine path/to/llama-server --ctx 4096,8192,16384 --kv f16,q8_0
 python -m marian plan model.gguf --need 6000               # the fastest measured configuration for 6,000 tokens
-python -m marian serve model.gguf --engine path/to/llama-server --need 6000
+python -m marian plan model.gguf --need 6000 --fit-now --json   # ... that also fits the VRAM free right now, as JSON
+python -m marian serve model.gguf --engine path/to/llama-server --need 6000 --fit-now
 ```
 
-`plan` refuses when nothing measured fits: it never extrapolates.
+`plan` refuses when nothing measured fits: it never extrapolates. Each profiled point records the GPU memory other
+programs were already using, so `--fit-now` (or `--vram-free MIB`) checks the model's own share against what is free
+at launch: a busier desktop than at profiling time cannot push a plan into the paging cliff. It cannot recover points
+that overflowed on a busy desktop; profile again on a quieter one for those. `--json` prints one object for other
+programs (`ok`, `row`, `config`, `server_args`, `vram_basis`, or `ok: false` with a `reason`; exit code 2 on failure).
+
+Install from a clone or from git (`pip install git+<this repository's URL>`): an unrelated package already uses the
+name `marian` on PyPI. Profiles are kept in `$MARIAN_PROFILES` if set, in the clone's `profiles/` when run from a
+clone, and in `~/.marian/profiles` when installed.
 
 ## How profiling works
 

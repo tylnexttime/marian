@@ -58,6 +58,10 @@ def gpu_memory_used_mib() -> list[int]:
     return [int(r[0]) for r in nvidia_smi("memory.used") if r and r[0].isdigit()]
 
 
+def gpu_memory_free_mib() -> list[int]:
+    return [int(r[0]) for r in nvidia_smi("memory.free") if r and r[0].isdigit()]
+
+
 def ram_mib() -> tuple[int, int]:
     """(total, available) MiB. Windows via GlobalMemoryStatusEx; elsewhere /proc/meminfo."""
     if os.name == "nt":

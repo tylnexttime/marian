@@ -7,6 +7,11 @@ cliff, measured 21/10/2026: 42.7 -> 5.5 tok/s). The walk stops at the first over
 
 The probe fills about 75 % of the context with neutral text, then generates a fixed number of tokens, so decode is
 measured at depth, not on an empty cache.
+
+Each row also records the GPU memory already in use just before its server started (`vram_baseline_mib`: the desktop,
+other programs) and the model's own share (`vram_model_mib` = peak minus that baseline), so a planner can re-check
+the fit against the VRAM free at launch. The baseline is read once per row; other programs' use can still drift
+while the row runs.
 """
 from __future__ import annotations
 
@@ -86,6 +91,8 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
                 else:
                     c.n_gpu_layers = k
                 row = {"ctx": ctx, "kv": kv, knob: k, "threads": threads}
+                before = machine.gpu_memory_used_mib()
+                baseline = before[0] if before else None
                 sampler = PeakSampler()
                 sampler.start()
                 ok, why = engine.start(model, c, log)
@@ -98,7 +105,9 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
                 finally:
                     engine.stop()
                     sampler.stop()
-                row.update(vram_peak_mib=sampler.vram, ram_avail_low_mib=sampler.ram_low)
+                row.update(vram_peak_mib=sampler.vram, vram_baseline_mib=baseline,
+                           vram_model_mib=(max(sampler.vram - baseline, 0) if baseline is not None and sampler.vram else None),
+                           ram_avail_low_mib=sampler.ram_low)
                 if row["status"] == "ok":
                     near_full = total_vram and sampler.vram >= total_vram - vram_margin_mib
                     cliff = best and row["tg_tps"] < best * collapse
