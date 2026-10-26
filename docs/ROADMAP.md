@@ -76,7 +76,10 @@ Still to build:
   Maya #417.
 - **Cap the tier at about half of RAM, and copy all-or-none with a commit-room check** (E, in the fork). *Theirs*:
   upstream #31122's Windows note, Maya v1.1.27, Strata v0.2.6. This means re-testing our partial 6 GiB tier.
-- Learned counts (P4), and the governor reading the DXGI budget rather than `nvidia-smi`.
+- Learned counts (P4), and a system-wide VRAM reading for the governor. The design asked for the DXGI budget, but a
+  live read (27/10) showed `QueryVideoMemoryInfo` reports only the calling process's budget and usage: with another
+  process holding 15 GB it still read 15,280 MiB free, against `nvidia-smi`'s 1,090. So the governor keeps
+  `nvidia-smi` and the next candidate is the adapter-wide counter `GPU Adapter Memory(*)\Dedicated Usage`.
 - Build on upstream's **#30966** (`--moe-cache-cpu-share` + `moe-cache-tune.py`) rather than duplicate it. Computing
   misses on the CPU changes rounding, so it is class A here: opt-in.
 

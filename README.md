@@ -203,8 +203,8 @@ Be warned; this is research code.
   proxy, the live check, `--confirm` and the CPU thread sweep (all built 27/10/2026) have run against a fake engine,
   a fake llama-server, fake memory readings and a fake clock (30 tests; five deliberately broken versions of the code
   each fail at least one of them). None has yet met a real competing allocation, a real paging cliff or a real
-  thread ladder on the GPU. Memory is read through `nvidia-smi`, not the DXGI budget the design asks for, so WDDM's
-  own accounting is not seen. `--confirm` runs 4 rounds with a fresh server per window, far fewer than the 64 windows
+  thread ladder on the GPU. Memory is read through `nvidia-smi`. The DXGI budget the design asks for turned out to be
+  per-process (it does not see another program's VRAM), so it is not used. `--confirm` runs 4 rounds with a fresh server per window, far fewer than the 64 windows
   of Strata's rule it follows, so it can only catch large differences.
 - **Calibration v1 measures, then trusts its measurement.** The planner restores cache budgets, miss sources, tier
   sizes and thread counts into the launch configuration, and `serve` checks the chosen row against the VRAM and RAM
