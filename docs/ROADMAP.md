@@ -43,7 +43,7 @@ before the build.
 | **Pin mapped expert ranges** (upstream #31122, closed by a bot, not on merit) as a measured arm | E | Prompt speed +27-44% (*theirs*) | upstream PR #31122 | S |
 | **Layer-major chunked prefill**, then refill the cache with the prompt's hottest experts | E at a fixed ubatch | Moves M5 forward: a 12 GB card prefilled 231 tok/s at 8K this way | Strata v0.2.4; MoE-CORE (arXiv 2610.01950); Maya #352 (*theirs*) | L |
 
-### 3. Calibration v1 (M1.3, Python side in progress)
+### 3. Calibration v1 (M1.3): Python side built 27/10/2026; governor, live confirmation and learned counts not yet
 
 Built from the design, plus safety and method rules other projects paid for:
 
@@ -128,7 +128,7 @@ gate should use a model whose licence fits the deploying organisation.
 | # | Debt | State |
 |---|---|---|
 | 1 | 107 commits behind upstream | **done 27/10**: rebased onto `63b4b303`, E48 passed (exact, decode exit met) |
-| 2 | M0 drops the cache budget when it launches a plan | fixed on the M1.3 branch (in progress) |
+| 2 | M0 drops the cache budget when it launches a plan | **done 27/10**: plans restore cache budget, miss source and tier |
 | 3 | Prefill 4-5x behind stock with the tier | prefill track above |
 | 4 | Exactness proved at top-3 log-probability, not full logits; no E0 harness or parity matrix | M1.2 above |
 | 5 | Most arms ran one or two rounds | five rounds only for the decode exit; repeat any result that changes a default |
