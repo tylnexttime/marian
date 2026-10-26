@@ -19,7 +19,7 @@ and an NVMe model drive (`docs/design/RESEARCH-PACK.md`).
 **Where the numbers come from.** Files in this repository are cited by path. The result tables are copied into the
 repository as `docs/m1.0/*-summary.md`, `docs/m1.1/*-summary.md` (the gate pair on the M1.1 build is
 `docs/m1.1/gate11-summary.md`), `docs/m1.2/results/` and `docs/m1.1/probe/*.txt`, so a citation such as `m1.1/p3-summary.md` means
-`docs/m1.1/p3-summary.md`. Register entries (E34 to E45) are in the project's private test register; every number they
+`docs/m1.1/p3-summary.md`. Register entries (E34 to E52) are in the project's private test register; every number they
 carry is also in a table here. Raw per-request logs and traces stay in the research workspace. Anything not verified is
 marked.
 
@@ -387,38 +387,132 @@ repeat, 0. Stock offload of the same model changes all 10 answers and moves log-
 contrast matters twice: it shows the instrument can now fail, and it shows that "exact" is something Marian's cache
 has and stock layer offload does not.
 
+## 6c. Monday 26 and Tuesday 27/10: the question answered, the rebase, and the prefill hunt
+
+Chris answered the open question at the end of section 7 and then, on Tuesday morning, handed the day over: "you are
+in charge, C. kindly make all decisions by yourself". Every decision below was made and logged that way, and each
+test was written into the register before it ran.
+
+**1. The open question, answered.** The M1 exit stays as written, so M1 is met (A21, A22). The laptop use case becomes
+the next milestone, with its own pass rule written before any run (point 4).
+
+**2. A tempting unlock, measured and parked (26/10, register E46, A23).** Chris asked whether the FP16/BF16 tensor-rate
+unlock for GeForce cards (Zagitta/gpu-unlock) was worth installing for prefill, at least to know that we gain
+nothing by it. It doubles the rate of FP16/BF16 matmuls that accumulate in FP32, and nothing else, and it needs
+Linux or Secure Boot off. So we did not install it: a CUPTI trace recorded every kernel of a prefill, and we summed the
+time the unlock could touch. The ceiling was under 10% of kernel time in 7 of 8 cases (11.4% at most), and about 1% of
+wall time in the 8 GB gate case, which is CPU-bound. The quantised INT8 matmuls, which the unlock does not touch, take
+60-77% of kernel time. Parked.
+
+**3. Leads first, then a roadmap.** Two scans ran in the morning: upstream llama.cpp since our pin (107 commits), and
+the wider ecosystem (other engines, and 2025-2026 papers). Each lead was weighed by its class (exact, verified
+speculation, answer-changing) and by evidence (ours, or *theirs*), and the result became the living
+[ROADMAP](ROADMAP.md). The scan also corrected our README: Swift's publisher (UkisAI) and the IST-DASLab authors were
+missing from the thanks. And Swift's licence bounds commercial use, so it stays a research test model.
+
+**4. The next milestone, written before any run (register E50).** Gemma 4 26B-A4B IQ4_XS on an 8 GB GPU, with about
+25 GB of RAM taken by a desktop. Exact Marian, configured by its own calibration with no hand tuning, must match or
+beat stock's best `-ncmoe` on median decode and median 4K prefill over five interleaved rounds. The milestone is
+exact-only, by decision: stock offload changes answers (A22). Answer-changing switches are measured and reported, but
+they cannot pass it. If Marian loses, the planner choosing stock on that machine is the right behaviour, and is
+reported as such. Our own prediction for today's code is a FAIL, on prefill.
+
+**5. The rebase (E48, A25).** 107 upstream commits re-applied with mechanical fixes. But three upstream commits change
+Swift's numerics, so exactness was proved again from scratch rather than assumed. Gemma's numbers did not move: the
+all-VRAM reference is bit-identical to the old base's, every cache arm still matches it with a difference of exactly
+0, and the stock contrast differs by the same 0.59 as before. Swift's text did change (6 of 10 prompts diverge from
+the old base within 128 tokens), as those commits predicted. The decode exit still holds, narrowly after a 16K prompt
+(12.6 against 12.0, one round). The fork now sits on `63b4b303`.
+
+**6. How predictable is the routing? (E47, A24).** Before anyone builds a router predictor or a prefetcher, we bounded
+what prediction could buy, offline, on traces we already had (`marian predict`).
+- **Persistence is real:** a token reuses 38% of the previous token's experts at a layer, against 20% by chance.
+- **No cross-layer or prompt signal:** predicting the next layer's experts from this layer's is dead (19%, below plain
+  persistence), a prompt's prefill does not predict its decode, and routing is close to uniform across prompts.
+- **The headroom is real, but in the miss path:** perfect one-layer-ahead prediction, served from pinned RAM, would be
+  worth +41% (20.5 against 14.5 tok/s). So overlapping copies (M2) comes before any predictor, and a predictor will be
+  scored on misses only.
+
+**7. Where the prefill time goes (E49, A26).**
+- **The suspect:** Swift's per-layer embedding table, 26.8 GiB, read through the same memory map as the experts on a
+  32 GB machine. Another project had seen that very table evict experts.
+- **The probe:** we wrote a small residency probe (`tools/wsprobe`, no admin rights needed). It counts, page by page,
+  how much of each tensor kind a process holds, and we tested it against a synthetic model with known answers before
+  trusting it.
+- **The suspect was innocent:** the table never held more than 0.48 GiB.
+- **What the probe saw instead:** about 38,700 single-page disk reads per second during the tier's prefill. Expert
+  pages were faulting in one by one under memory pressure: 4 KiB at a time, the slowest way to read an SSD.
+- **Our prediction** (pollution, about 55%) was wrong. The fix the data points at was already being built (point 8).
+
+**8. Prefill through P3 (E51, running as this is written).** Two fork patches:
+- **Chunked pinning:** pin the tier in chunks under a RAM cap. Windows quietly falls back to slow pageable memory when
+  one large pin fails.
+- **Large-batch misses through P3:** serve them through the unbuffered ring and the pinned tier instead of memory-map
+  faults.
+- **The pass rule:** at least twice the 16K prefill speed, decode within 5%, and answers unchanged.
+
+The result goes in A27.
+
+**9. Calibration v1 (M1.3) becomes code.**
+- **Calibration:** `marian calibrate` measures a machine before anything is served: cache arms with a VRAM-cliff
+  bisection, a RAM safety envelope, and CPU thread counts (other projects saw fewer threads win by 2-3x).
+- **Plans:** they now restore the cache budget, miss source, tier and threads at launch, which fixes a debt from M0.
+- **Serving:** `marian serve` runs behind a small front proxy on 127.0.0.1.
+  - **Admission:** one request at a time, one queued; the rest get a 503 with a reason.
+  - **Checks:** a passive check that the first answers run as fast as the profile said, and `--confirm` for a live A/B
+    against the runner-up.
+  - **Memory governor:** pauses admission under pressure and restarts on the next smaller measured row, keeping an
+    exact plan exact.
+  - **Rollback:** `--stock`.
+- **Tests:** 118, all offline. The governor has not yet faced a real competing allocation, and that is M1.3's exit.
+
+**10. Is reusing a prompt prefix exact? (E52, registered, not yet run).**
+- **Why it matters:** a gate re-reads the same instructions on every call, so reusing their KV would turn most of its
+  prefill into a lookup.
+- **Why it may not be exact:** the reused KV was computed in a different batch split.
+- **Where it stands:** the registered run is waiting behind E51 for the GPU. An uncounted instrument check already
+  found 0 of 3 reused answers identical to their fresh twins, so prefix reuse ships **off** in `serve` until E52 says
+  otherwise.
+- **The client path was fixed first:** the check also found that on Gemma 4 (sliding-window attention) whether
+  llama-server reuses a prefix at all depends on the endpoint. So the registered run's client path was fixed before
+  it runs, and the register says it was fixed after the check.
+
+**11. A mistake about time.** Three pre-registration stamps in the register were written as guessed clock times, not
+read from the clock, and they fell after the work had begun. The E47 worker noticed its own entry was stamped too
+late. The stamps were corrected from file evidence, and a rule was added: read the clock before stamping. A
+pre-registration is worth only as much as its timestamp.
+
 ## 7. What is next
 
-From `DESIGN-M1.md` section 10, reshaped by what M1.0 and M1.1 measured:
+The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 
-- **Done on 24/10:** M1.1 (the exactness floor, P3's ring and tier, the trace-replay probe) and its exit check (replay
-  = server, +0.00 points); the controls; the Maya drive test; the M1.2 trace and replay (A19, A20); the five-round
-  confirmation of the decode exit (A21); log-probability exactness against all-VRAM for every miss source (A22).
-- **The prefill cost of the tier is now the main obstacle to a default.** P3 covers decode only: prompts still fault
-  through the memory map, and the 6 GiB pinned tier takes the page cache they fault through (prefill 4-5x slower than
-  stock, about 3x slower than upstream's cache path).
-  Candidate fixes to measure: release or shrink the tier while a long prompt runs, give prefill its own unbuffered
-  reads (the design's M2 expert source moved forward), or size the tier by need (M1.3).
-- **M1.2 as designed (a smarter VRAM policy) is deprioritised:** on the real trace every candidate loses to upstream's
-  SLRU (A19). What survives from M1.2 is the tooling: the routing-id trace and the exact replay, which make every
-  later policy or tier question answerable offline in a minute instead of on the GPU in an hour.
-- **Exactness, the rest of the way to the M1 exit:** the single-layer harness (E0) and the kernel-boundary parity
-  matrix, and comparing full logits: the top-3 log-probabilities are now identical to full precision (A22), but the
-  whole vector is not logged, so bitwise is not claimed.
-- **M1.3, calibration v1:** probes with a safety envelope, a VRAM cliff finder, the plan, a live confirmation, a memory
-  governor with supervised restart, one-sequence serving with clear refusals, learned counts, and `marian serve
-  --stock` as the rollback. This is where "self-calibrating" stops being a goal and becomes code.
-- **M1.4:** real hardware: a real 8 GB GPU, Linux, a slower link and drive.
-- **M2 to M5:** the full expert source including prefill, drain removal, look-ahead prefetch (M2); verified
-  speculation (M3); opt-in answer-changing switches with blind quality gates and the bit-faithful CPU kernel spike
-  (M4); prefill work, including bank lending and layer-major prefill (M5).
-
-**The open question for Chris.** M1's exit asks for at least 12 tok/s on Swift on the 16 GB reference laptop, warm
-and after a 16K prompt. The five-round confirmation says the P3 tier meets it in both states (14.4-14.6 warm,
-13.4-13.7 after a 16K prompt; A21), exactly (A22). But the use case that now drives the work is different: an 8 GB GPU beside a desktop
-that uses most of the RAM, with 4-30B models and prefill as important as decode. On that laptop stock llama.cpp
-already meets 20-30 tok/s. **Do we keep the M1 exit as written, or re-aim it at the laptop use case** (for example:
-beat the best stock placement on decode *and* prefill, in the 8 GB and 25 GB setting, for one named model)?
+- **Done:**
+  - M1: the decode exit is met and kept as written, exactly (A21, A22).
+  - The rebase onto `63b4b303` (E48).
+  - The predictability bounds (E47).
+  - The prefill diagnosis (E49).
+  - Calibration v1's Python side and the serving rules (M1.3, tested offline).
+- **Prefill is the main target.**
+  - E51 routes large-batch misses through P3.
+  - Then: prefetch the next layer's experts while this one computes; pinning the mapped expert ranges as a measured
+    arm (upstream #31122); layer-major prefill.
+- **M1.3's exit:**
+  - the governor against a real competing allocation;
+  - learned counts;
+  - the pinning rules in the fork, which E51 starts.
+- **E52** decides whether a gate's fixed prefix may be reused in exact mode.
+- **The 8 GB milestone (E50)** runs once the prefill track lands. Its rule is already written, and so is our
+  prediction that today's code fails it.
+- **Exactness, the rest of the way:**
+  - the single-layer harness (E0);
+  - the kernel-boundary parity matrix;
+  - full-logit comparison, where today only the top 3 are compared.
+- **Later milestones:**
+  - M1.4: real hardware.
+  - M2: overlap copies with routing, which E47 says comes before any predictor.
+  - M3: verified speculation.
+  - M4: opt-in answer-changing switches.
+  - M5: prefill compute.
 
 ## 8. Mistakes and rejected options, in one place
 
@@ -444,6 +538,10 @@ beat the best stock placement on decode *and* prefill, in the 8 GB and 25 GB set
 | 24/10 | a PowerShell loop counter `$r` overwrote `$R` (names are case-insensitive) | caught in the first second, nothing ran; renamed |
 | 22-24/10 | no run ever recorded a probability (the client read field names this server does not send), so every "top-3 identical" compared nulls | client reads both shapes and refuses an empty top-k; analyser says "not measured"; measured: identical to full precision (E44, E45) |
 | 24/10 | "the tier costs prefill 3x" was against upstream's cache, not stock | against stock it is 4-5x (E44) |
+| 26-27/10 | three pre-registration stamps were guessed clock times, later than the work they preceded | corrected from file evidence; rule: read the clock before stamping (section 6c, point 11) |
+| 27/10 | the first roadmap offered a fix for the embedding table's page granularity before checking whether upstream already prefetches its rows | corrected the same morning; E49 then ruled the table out |
+| 27/10 | prediction: "the embedding table crowds the experts out" (E49, about 55%) | wrong: it held under 0.5 GiB; the cost is single-page expert faults |
+| 27/10 | E47's frequency-prior check failed the 2x bar its worker declared | judged not voiding (the ids reproduce exactly, and the null differs); the flat prior is reported as a finding |
 
 ---
 
@@ -1001,3 +1099,87 @@ Taught us: **the cache is exact against the true reference to full float precisi
 prediction (difference exactly 0) was right, and the stock contrast was 30-60x larger than the 0.01 we guessed. The
 contrast is also what makes the result worth something: the same instrument that reads 0 for the cache reads up to
 0.59 for stock. Not shown: the full logit vector (only the top 3 are recorded).
+
+### 26-27/10/2026
+
+#### A23. E46: what the FP16/BF16 unlock could speed up at most
+
+Conditions: a CUPTI activity trace of every kernel (loaded through `CUDA_INJECTION64_PATH`, no admin) on build-m1.2's
+`llama-bench`, flash attention on, prompts of 4,096 and 16,384 tokens, two repeats, four gate cases (whole on the
+GPU, and offloaded at 8 GB). The ceiling counts every kernel whose tensor-core instructions take FP16/BF16 inputs with
+FP32 accumulation, the only ones the unlock speeds up, as if it made them free.
+
+| Measure | Result |
+|---|---|
+| Ceiling, share of kernel time | under 10% in 7 of 8 cases; 11.4% at most (Gemma 4 E4B, 16K) |
+| Ceiling, 8 GB offloaded gate case | about 1% of wall time (the run is bound by the CPU) |
+| What the time is | the addressable time is almost all FlashAttention; INT8 quantised matmuls take 60-77% of kernel time, untouched |
+
+Taught us: not worth a Secure Boot change or a Linux boot for this workload. Parked; if prefill compute ever matters,
+the lever is the INT8 matmuls (M5).
+
+#### A24. E47: predictability bounds of Swift's routing
+
+Conditions: offline, CPU only. `marian predict` read the M1.2 routing-id traces (Swift 1.5 IQ2_XS,
+`--moe-cache-mib 9400`). Training prompts were the even decode prompts and testing the odd ones (1,204 test tokens).
+Source: [docs/m1.2/E47.md](m1.2/E47.md).
+
+| Measure | Result |
+|---|---|
+| Determinism: two runs' decode ids | 2,210 of 2,210 tokens identical |
+| Persistence: share of a token's experts also used by the previous token, same layer | 37.7% (shuffled null 20.1%; 100 shuffles 19.5-20.7%) |
+| Next layer's experts from this layer's ids | 19.2%, below persistence |
+| Global frequency prior, out of sample | 3.1% (chance 1.95%) |
+| Perfect one-layer-ahead prediction served from pinned RAM | 20.5 against 14.5 tok/s, +41% |
+
+Taught us: the headroom is real and sits in the miss path. Overlap (M2) comes before any predictor, and a predictor is
+to be scored on misses, not on all activations.
+
+#### A25. E48: the rebase onto `63b4b303`
+
+Conditions: the six-patch stack re-applied (patches 1, 3 and 6 byte-identical; 2, 4 and 5 changed only for upstream's
+`no_alloc` plumbing and moved context). Build: MSVC 19.44 and CUDA 12.8, sm_89. `ctest -L main`: 16 of 16 passed.
+Gemma: the E45 arms; Swift: one interleaved round of the E44 protocol, with both arms on the new build.
+
+| Gemma 4 26B-A4B IQ4_XS, against all-VRAM F1 | Texts | Top-3 log-probabilities | Largest difference, chosen token |
+|---|---|---|---|
+| F2 (the reference again) | 10/10 | 10/10 | 0 |
+| M cache 2,500 MiB, memory-mapped misses | 10/10 | 10/10 | 0 |
+| T cache + tier 4 GiB | 10/10 | 10/10 | 0 |
+| R cache + ring | 10/10 | 10/10 | 0 |
+| C stock `-ncmoe 24` (contrast) | 0/10 | 0/10 | 0.590 |
+| F1 at the new base against F1 at the old base | 10/10 | 10/10 | 0 |
+
+| Swift 1.5 IQ2_XS | Tier 6 GiB | Stock `-ncmoe 34` | E44 tier, 5 rounds |
+|---|---|---|---|
+| Warm decode, all tokens | 15.1 | 11.7 | 14.4-14.6 |
+| After a 16K prompt, all tokens | 12.6 | 9.5 | 13.4-13.7 |
+| Prefill 4K / 16K, tok/s | 25.9 / 44.6 | 109.0 / 167.2 | 18.9-25.8 / 29.7-34.4 |
+
+Taught us: the rebase kept exactness where there is a true reference (Gemma), and Swift's text moved as the upstream
+numerics commits predicted (6 of 10 prompts diverge from the old base within 128 tokens). The exit after 16K holds by a
+thin margin, on one round.
+
+#### A26. E49: residency by tensor kind during a 16K prompt
+
+Conditions: build-m1.2, Swift 1.5 IQ2_XS, E44's request sequence, one round per arm. `tools/wsprobe` sampled the
+server's working set every 500 ms (stride 64 pages, checked against an exact count first; the self-test passed 13 of
+13 checks on a synthetic model). A: cache 9,400 MiB, memory-mapped misses. B: A plus the 6 GiB tier. C: stock
+`-ncmoe 34`.
+
+| Arm | Embedding table resident at the end of the 16K prefill | Experts resident | Prefill 16K, tok/s | Decode, all tokens |
+|---|---|---|---|---|
+| A | 0.36 GiB | 21.10 GiB | 125.7 | 6.6 |
+| B | 0.03 GiB | 15.56 GiB | 37.0 | 14.0 |
+| C | 0.35 GiB | 21.36 GiB | 170.1 | 12.6 |
+
+During B's prefill the drive served about 38,700 page reads a second at about 151 MB/s: 4 KiB per read. B took
+18.65 million page faults in 523 s. B holds about 5.5 GiB fewer expert pages than A or C, roughly its pinned tier.
+
+Taught us: the embedding table is not the cause (at most 0.48 GiB in any arm, at any moment). The tier takes the RAM,
+and the prefill pays for it in single-page faults. The fix is to give prefill misses the same unbuffered and pinned
+sources decode already has (E51).
+
+#### A27. E51: prefill through P3 (placeholder: running)
+
+#### A28. E52: is prefix reuse exact? (placeholder: registered, waiting for the GPU)
