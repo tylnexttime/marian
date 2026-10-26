@@ -61,9 +61,15 @@ Built from the design, plus safety and method rules other projects paid for:
 
 ### 4. The next milestone: the 8 GB laptop under RAM pressure
 
-Its pass rule is written before any run. The proposal is to match or beat stock's best offload, on decode and on
-prefill, with about 25 GB of RAM in use, for one named gate model. Open question: whether opt-in class A switches may
-count, since stock offload itself changes answers.
+The pass rule was written 27/10/2026, before any run. Gemma 4 26B-A4B IQ4_XS, with the GPU capped at 8 GB and about
+25 GB of RAM in use. **Exact Marian, with its configuration chosen by its own calibration, must match or beat stock's
+best `-ncmoe` offload on median decode AND median 4K prefill over five interleaved rounds**, and be at least as fast
+on decode in 4 of the 5 rounds.
+
+- **Exact-only, decided:** stock offload changes answers. Opt-in class A switches are measured and reported in their
+  own rows, but they cannot pass this milestone.
+- **If Marian loses,** its planner choosing stock on that machine is the right behaviour, and is reported as such.
+- IQ3_XXS is reported too, not judged: today's fastest gate configuration across quants.
 
 ### 5. M1.2, reshaped: evaluation and exactness rather than a new VRAM policy
 
