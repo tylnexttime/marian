@@ -145,6 +145,44 @@ def process_memory_mib(pid: int) -> dict:
     return {}
 
 
+def physical_cores() -> int | None:
+    """Physical CPU cores (not logical processors), or None when the OS will not say.
+
+    The CPU thread sweep (M1.3) starts its ladder here: llama.cpp's decode on CPU-held experts is bound by memory
+    bandwidth, and more threads than cores, or threads on efficiency cores, can make it slower (Maya #433 saw 15 -> 41
+    tok/s with fewer threads; theirs). Windows: GetLogicalProcessorInformation, counting RelationProcessorCore
+    records (each is one core, whatever its hyper-threads); no admin rights needed. Linux: distinct (physical id,
+    core id) pairs in /proc/cpuinfo."""
+    try:
+        if os.name == "nt":
+            class SLPI(ctypes.Structure):                  # SYSTEM_LOGICAL_PROCESSOR_INFORMATION, 32 bytes on x64
+                _fields_ = [("ProcessorMask", ctypes.c_size_t), ("Relationship", ctypes.c_int),
+                            ("Union", ctypes.c_ulonglong * 2)]
+            k32 = ctypes.windll.kernel32
+            size = ctypes.c_ulong(0)
+            k32.GetLogicalProcessorInformation(None, ctypes.byref(size))    # fails with the size it needs
+            n = size.value // ctypes.sizeof(SLPI)
+            if n <= 0:
+                return None
+            buf = (SLPI * n)()
+            if not k32.GetLogicalProcessorInformation(buf, ctypes.byref(size)):
+                return None
+            cores = sum(1 for x in buf[:size.value // ctypes.sizeof(SLPI)] if x.Relationship == 0)
+            return cores or None
+        pairs, phys = set(), "0"
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                k, _, v = line.partition(":")
+                k, v = k.strip(), v.strip()
+                if k == "physical id":
+                    phys = v
+                elif k == "core id":
+                    pairs.add((phys, v))
+        return len(pairs) or None
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
 def detect() -> Machine:
     total, _ = ram_mib()
     gpus = [Gpu(int(r[0]), r[1], int(float(r[2])), r[3], r[4], r[5])

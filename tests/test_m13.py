@@ -14,7 +14,7 @@ from unittest import mock
 
 from marian import cli, engines, launch, machine, plan, profile
 from marian.engines import Config, LlamaCpp, parse_help, parse_version, same_build
-from marian.profile import CacheOptions, find_cliff, read_server_log, sha256_head, tier_ladder
+from marian.profile import CacheOptions, ThreadOptions, find_cliff, read_server_log, sha256_head, tier_ladder
 
 from test_offline import write_gguf
 
@@ -297,7 +297,7 @@ class CacheArms(unittest.TestCase):
                 mock.patch.object(profile.geometry, "floor_mib", lambda g, n=512: 500), \
                 mock.patch.object(profile.geometry, "full_mib", lambda g, n=512: 12000):
             out = profile.run(toy_moe(Path(d)), eng, [4096], ["f16"], 2, None, Path(d) / "profiles", 16,
-                              cache=CacheOptions(**opt))
+                              cache=CacheOptions(**opt), sweep=ThreadOptions(enabled=False))
             return json.loads(out.read_text(encoding="utf-8"))
 
     def test_marian_build_gets_cliff_and_miss_source_arms(self):

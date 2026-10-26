@@ -37,6 +37,14 @@ Every row records `exact_class`: every expert computed on the GPU (full offload,
 `-ncmoe` > 0, which changed answers in A22). `plan --exact-only` filters on it. Rows also record the RAM available
 before the server started and its low point, the commit headroom low point, and the server's peak working set and
 commit where the OS gives them.
+
+**CPU thread sweep (M1.3).** A row that computes on the CPU (stock `-ncmoe` > 0, or a dense model with layers left
+on the CPU) is bound by memory bandwidth there, and llama.cpp's default thread count is not always its best: Maya #433
+saw 15 -> 41 tok/s with fewer threads (theirs, a user report). So, unless `--threads` fixes the count, each (context,
+KV) cell's fastest CPU-computing walk point is measured again at a small ladder of thread counts (physical cores,
+cores - 2, cores / 2, 8, 4; never above the logical processors) and every result is kept as a row (`arm` threads), so
+the planner simply picks the fastest. Rows that compute every expert on the GPU (full offload, cache arms) skip it:
+their threads only feed the GPU.
 """
 from __future__ import annotations
 
@@ -74,6 +82,61 @@ class CacheOptions:
     tier_steps: int = 3                  # measure at most this many tier sizes: the largest the envelope allows
     ring: bool = True
     n_ubatch: int = 512                  # the server's default; the exactness floor depends on it
+
+
+@dataclass
+class ThreadOptions:
+    """The CPU thread sweep of a profile (rows that compute on the CPU only)."""
+    enabled: bool = True
+    ladder: tuple[int, ...] | None = None    # None: thread_ladder() of this machine
+
+
+def thread_ladder(physical: int | None, logical: int | None) -> list[int]:
+    """Thread counts to try, largest first: physical cores, cores - 2, cores / 2, 8 and 4, each between 1 and the
+    logical processors, without repeats. Without a physical count, the logical count stands in."""
+    cores = physical or logical or 0
+    if cores <= 0:
+        return []
+    top = logical or cores
+    out: list[int] = []
+    for t in (cores, cores - 2, cores // 2, 8, 4):
+        if 1 <= t <= top and t not in out:
+            out.append(t)
+    return sorted(out, reverse=True)
+
+
+def thread_sweep(model: Path, engine, s: dict, ctx: int, kv: str, cell: list[dict], log: Path, total_vram: int,
+                 n_predict: int, margin_mib: int, ladder: list[int]) -> tuple[list[dict], dict]:
+    """The ladder at the fastest CPU-computing point of one walk cell; returns its rows and a summary."""
+    summary: dict = {"ctx": ctx, "kv": kv}
+    cpu = [r for r in cell if r["status"] == "ok" and not r.get("exact_class")]
+    if not cpu:
+        summary["skipped"] = "no measured point computes on the CPU (every expert or layer is on the GPU)"
+        return [], summary
+    best = max(cpu, key=lambda r: r["tg_tps"])
+    c0 = Config.from_row(best)
+    knob = ("n_cpu_moe", c0.n_cpu_moe) if c0.n_cpu_moe is not None else ("n_gpu_layers", c0.n_gpu_layers)
+    summary.update(split={knob[0]: knob[1]}, default_tg_tps=best["tg_tps"], default_threads=best.get("threads"))
+    rows = []
+    for t in ladder:
+        c = Config.from_row(best)
+        c.threads = t
+        row = dict(c.to_row(), arm="threads", exact_class=c.exact_class(s["block_count"]))
+        measure(engine, model, c, row, log, n_predict)
+        judge(row, total_vram, margin_mib, 0.0, 0.6)       # VRAM only: fewer threads may rightly be slower
+        rows.append(row)
+        print(json.dumps(row), flush=True)
+        time.sleep(5)
+    summary["results"] = [{"threads": r["threads"], "status": r["status"], "tg_tps": r.get("tg_tps"),
+                           "pp_tps": r.get("pp_tps")} for r in rows]
+    ok = [r for r in rows if r["status"] == "ok"]
+    top = max(ok, key=lambda r: r["tg_tps"], default=None)
+    if top is not None and top["tg_tps"] > best["tg_tps"]:
+        summary.update(best_threads=top["threads"], best_tg_tps=top["tg_tps"])
+    else:
+        summary.update(best_threads=best.get("threads"), best_tg_tps=best["tg_tps"],
+                       note="the engine's default thread count was fastest")
+    return rows, summary
 
 
 def sha256_head(path: Path, n: int = 64 * 2**20) -> str:
@@ -362,8 +425,9 @@ def _capabilities(engine) -> dict:
 
 def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: int, threads: int | None,
         out_dir: Path, n_predict: int = 64, vram_margin_mib: int = 300, collapse: float = 0.6,
-        cache: CacheOptions | None = None) -> Path:
+        cache: CacheOptions | None = None, sweep: ThreadOptions | None = None) -> Path:
     cache = cache or CacheOptions()
+    sweep = sweep or ThreadOptions()
     s = gguf.summary(model)
     m = machine.detect()
     total_vram = m.gpus[0].vram_mib if m.gpus else 0
@@ -373,7 +437,10 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{m.fingerprint()}-{sha256_head(model)}-{engine.name}"
     log = out_dir / f"{stem}.server.log"
-    rows, searches = [], []
+    rows, searches, sweeps = [], [], []
+    ladder: list[int] = []
+    if sweep.enabled and threads is None:
+        ladder = list(sweep.ladder) if sweep.ladder else thread_ladder(machine.physical_cores(), m.logical_cpus)
     for kv in kvs:
         for ctx in ctxs:
             best, cell = 0.0, []
@@ -393,6 +460,11 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
                     break
                 time.sleep(5)
             rows += cell
+            if ladder:
+                trows, tsum = thread_sweep(model, engine, s, ctx, kv, cell, log, total_vram, n_predict,
+                                           vram_margin_mib, ladder)
+                rows += trows
+                sweeps.append(tsum)
             if with_cache:
                 crows, summary = cache_arms(model, engine, s, geom, ctx, kv, threads, cell, log, total_vram, n_predict,
                                             vram_margin_mib, collapse, cache)
@@ -409,6 +481,12 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
                                "cells": searches}
     elif cache.enabled and s["moe"]:
         doc["cache_search"] = {"skipped": "the engine is not a Marian build (its --help lacks the P3 flags)"}
+    if ladder:
+        doc["thread_search"] = {"ladder": ladder, "physical_cores": machine.physical_cores(),
+                                "logical_cpus": m.logical_cpus, "cells": sweeps}
+    elif sweep.enabled:
+        doc["thread_search"] = {"skipped": "--threads fixed the thread count" if threads is not None
+                                else "the processor count could not be read"}
     out = out_dir / f"{stem}.json"
     if out.exists():                                     # a new profile replaces the old one; keep one previous copy
         out.replace(out.with_name(out.name + ".prev"))
