@@ -54,6 +54,7 @@ REWRITE_PATHS = {"/completion", "/completions", "/v1/completions", "/chat/comple
                  "/infill", "/v1/responses", "/responses", "/v1/messages"}
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "trailers",
        "transfer-encoding", "upgrade", "content-length", "host"}
+RESP_SKIP = HOP | {"server", "date"}  # the proxy's own response line already sends these
 SSE_DATA = re.compile(rb"^data:\s*(\{.*\})\s*$", re.M)
 
 
@@ -264,7 +265,7 @@ class Handler(BaseHTTPRequestHandler):
             length = resp.getheader("Content-Length")
             self.send_response(resp.status, resp.reason)
             for k, v in resp.getheaders():
-                if k.lower() not in HOP:
+                if k.lower() not in RESP_SKIP:
                     self.send_header(k, v)
             if length is not None and not chunked:
                 data = resp.read()
@@ -351,6 +352,7 @@ class Supervisor:
         self.events: list[str] = []
         self.lock = threading.RLock()
         self.prime_result: dict | None = None
+        self.after_start = None                         # called with the row after every successful start
 
     def event(self, msg: str) -> None:
         line = f"# marian serve {time.strftime('%Y-%m-%d %H:%M:%S')}: {msg}"
@@ -369,6 +371,8 @@ class Supervisor:
             self.state = "serving"
             if self.opt.gate_prefix is not None:
                 self.prime()
+            if self.after_start is not None:
+                self.after_start(row)
         return ok, why
 
     def prime(self) -> None:
@@ -501,6 +505,8 @@ def open_session(engine, model: Path, rows: list[dict], row: dict, opt: ServeOpt
                 pass
 
     live = confirm.LiveCheck(row.get("tg_tps"), opt.live_n, opt.slow, on_done=done) if opt.live_n > 0 else None
+    if live is not None:                                 # after a supervised restart, judge the new row
+        sup.after_start = lambda r: live.reset(r.get("tg_tps"))
     front = Front(("127.0.0.1", opt.port), gate, engine.port, opt, live, say=say)
     t = threading.Thread(target=front.serve_forever, daemon=True)
     t.start()

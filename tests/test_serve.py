@@ -430,6 +430,7 @@ class Governor(unittest.TestCase):
             sess.sup.tick()
             self.assertEqual([c.moe_cache_mib for c in eng.started], [3000, 2000])
             self.assertEqual((sess.sup.restarts, sess.sup.state, sess.gate.paused), (1, "serving", None))
+            self.assertEqual(sess.live.profiled, 35.0)          # the live check now judges the new row
             self.assertTrue(any("restart 1 of 3" in e and "cache 2000 MiB" in e for e in events))
             self.assertEqual(call(port, "/completion", {"prompt": "x"})[0], 200)
             clock.t = 20

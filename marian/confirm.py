@@ -25,6 +25,7 @@ user allowed non-exact rows (`--stock` or `--allow-non-exact`): a faster differe
 from __future__ import annotations
 
 import datetime as dt
+import http.client
 import json
 import math
 import os
@@ -80,6 +81,10 @@ class LiveCheck:
         self.profiled, self.n, self.slow, self.on_done = profiled_tps, n, slow, on_done
         self.samples: list[tuple[int, float]] = []
         self.result: dict | None = None
+
+    def reset(self, profiled_tps: float | None) -> None:
+        """A supervised restart changed the configuration: compare the next answers with the new row instead."""
+        self.profiled, self.samples, self.result = profiled_tps, [], None
 
     def add(self, timings: dict | None) -> dict | None:
         if self.result is not None or not timings:
@@ -143,7 +148,7 @@ def window(engine, model: Path, row: dict, log: Path, opt: ConfirmOptions) -> di
             return {"ok": False, "why": why}
         engine.complete("Hello.", opt.warmup)
         return dict(probe_window(engine, c.ctx, opt), ok=True)
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, http.client.HTTPException) as e:
         return {"ok": False, "why": f"{type(e).__name__}"}
     finally:
         engine.stop()
