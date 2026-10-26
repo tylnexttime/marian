@@ -370,6 +370,9 @@ class Proxy(unittest.TestCase):
             eng.up.hold.set()
             rest = r.read()
             self.assertIn(b'"timings"', rest)
+            deadline = time.monotonic() + 5              # the proxy reads the timings just after the last chunk is sent
+            while sess.live.result is None and time.monotonic() < deadline:
+                time.sleep(0.01)
             self.assertIsNotNone(sess.live.result)      # the live check read the last event's timings
             self.assertAlmostEqual(sess.live.result["live_tps"], 40.0, places=1)
 
