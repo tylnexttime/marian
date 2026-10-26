@@ -15,9 +15,11 @@ gate). Evidence marked *theirs* comes from another project's own machine and has
   experts through the memory map, and the pinned tier takes the page cache they need.
 - **A new suspect for the prefill cost** (found 27/10/2026, not yet measured as a cause): Swift's per-layer embedding
   table `per_layer_token_embd` is **26.8 GiB**, beside 33.0 GiB of routed experts, on a 32 GB machine. It is read row
-  by row through the same memory map, so its pages compete with the experts' pages in the page cache.
-  ik_llama.cpp found the same table evicting expert pages and fixed it (rows prefetched per batch: prompt speed
-  154.7 -> 203.0 tok/s, *theirs*).
+  by row through the same memory map, so its pages compete with the experts' pages in memory.
+  - ik_llama.cpp found the same table evicting expert pages and fixed it by prefetching each batch's rows: prompt speed
+    154.7 -> 203.0 tok/s (*theirs*).
+  - Upstream llama.cpp, and so our base, already does that row prefetch.
+  - The open question is page granularity: each 90-byte row brings in a whole 4 KiB page. Test E49 measures it.
 - **The use case that drives the work:** a PII/sensitivity gate on 4-30B models, on an 8 GB GPU beside a desktop that
   uses most of 32 GB. Prefill matters as much as decode there, and today stock offload wins that case.
 
@@ -35,7 +37,7 @@ before the build.
 | Item | Class | Why | Evidence | Effort |
 |---|---|---|---|---|
 | **Measure first: page-cache residency by tensor kind** (PLE, experts, other) during pp16K, tier on and off | test | Decide whether PLE pollution or tier pinning causes the 4-5x | our tensor sizes; ik #2389 | S |
-| **PLE row source**: read the batch's PLE rows explicitly (prefetch or unbuffered), keep the table out of expert-sized readahead | E | Swift's 26.8 GiB table; Gemma 4 E-models have PLE too | ik_llama.cpp #2389, #2692, #2563 (*theirs*) | S-M |
+| **PLE row source**: upstream already marks the table lazy and prefetches each batch's rows (`llama_prefetch_rows`, `PrefetchVirtualMemory` on Windows), as ik_llama.cpp does. What may remain is page granularity: a 90-byte IQ4_NL row costs a whole 4 KiB page, about 45x amplification. If E49 shows PLE pages crowding out experts, gather the rows into a small private buffer instead | E | Swift's 26.8 GiB table; Gemma 4 E-models have PLE too | ik_llama.cpp #2389, #2692, #2563 (*theirs*); upstream's own prefetch | S-M |
 | **Prefill misses through P3**: route the large-batch selective copy through the unbuffered ring and tier, not mmap faults | E | P3 serves decode only today | our E40/E44 | M |
 | **Prefill expert prefetch**: read layer l+1's experts while layer l computes | E | The fault stalls are serial today | ik_llama.cpp #2101, #2667: 1.9-2.7x on models larger than RAM (*theirs*, Linux) | M |
 | **Pin mapped expert ranges** (upstream #31122, closed by a bot, not on merit) as a measured arm | E | Prompt speed +27-44% (*theirs*) | upstream PR #31122 | S |
