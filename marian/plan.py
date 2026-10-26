@@ -19,6 +19,12 @@ arm; stock `-ncmoe` > 0 changes answers), and `stock` keeps the rows a stock lla
 placement flags (`-ncmoe` / `-ngl`, no expert cache, no Marian flag): the rollback. The expert cache is upstream's,
 but it is EXPERIMENTAL there (three changes in two weeks) and its rows were measured on the fork, whose exactness
 floor a stock build does not have, so the rollback leaves it out.
+
+**Live confirmation (M1.3).** A row may carry a `confirmed` record from `marian serve --confirm`: a live A/B against
+the runner-up over interleaved windows on this machine. A row that LOST such an A/B (`outcome` replaced) gives way to
+the row that beat it whenever that row also qualifies: a measurement taken live, head to head, outranks two profile
+numbers taken minutes apart. `runner_up` names the row such an A/B is run against, and `next_smaller` the row the
+memory governor restarts on; both keep an exact-class plan exact unless non-exact rows were allowed.
 """
 from __future__ import annotations
 
@@ -45,7 +51,8 @@ def rows_of(docs: list[tuple[Path, dict]], engine_name: str | None = None) -> li
         if engine_name is not None and eng != engine_name:
             continue
         blocks = (doc.get("model") or {}).get("block_count")
-        rows += [dict(r, _engine=eng, _file=p.name, _block_count=blocks) for r in doc.get("rows", [])]
+        rows += [dict(r, _engine=eng, _file=p.name, _block_count=blocks, _index=i)
+                 for i, r in enumerate(doc.get("rows", []))]
     return rows
 
 
@@ -79,10 +86,26 @@ def pinned_mib(row: dict) -> int:
     return to_config(row).pinned_mib()
 
 
-def choose(rows: list[dict], need: int, objective: str = "tg", vram_free_mib: int | None = None,
-           margin_mib: int = 300, *, exact_only: bool = False, stock: bool = False, ram_free_mib: int | None = None,
-           ram_floor_mib: int = 6144) -> dict | None:
-    key = "tg_tps" if objective == "tg" else "pp_tps"
+def key(row: dict) -> str:
+    """The launch configuration of a row, as a comparable string (the arm and the measurements are not part of it)."""
+    return to_config(row).key()
+
+
+def ram_need_mib(row: dict) -> int:
+    """Host RAM the row took when it was measured: the fall in available RAM from before its start to its low point,
+    else its peak working set, else what it pins. A comparison figure for the governor, not a promise."""
+    before, low = row.get("ram_free_before_mib"), row.get("ram_avail_low_mib")
+    if before is not None and low is not None and before >= low:
+        return max(before - low, pinned_mib(row))
+    if row.get("working_set_peak_mib") is not None:
+        return max(row["working_set_peak_mib"], pinned_mib(row))
+    return pinned_mib(row)
+
+
+def candidates(rows: list[dict], need: int, vram_free_mib: int | None = None, margin_mib: int = 300, *,
+               exact_only: bool = False, stock: bool = False, ram_free_mib: int | None = None,
+               ram_floor_mib: int = 6144) -> list[dict]:
+    """Every row that fits the request, the filters and the memory free now; unordered."""
     fits = [r for r in rows if r.get("status") == "ok" and r["ctx"] >= need]
     if exact_only:
         fits = [r for r in fits if exact_class(r)]
@@ -92,10 +115,74 @@ def choose(rows: list[dict], need: int, objective: str = "tg", vram_free_mib: in
         fits = [r for r in fits if (s := vram_share(r)[0]) is not None and s + margin_mib <= vram_free_mib]
     if ram_free_mib is not None:
         fits = [r for r in fits if pinned_mib(r) <= max(ram_free_mib - ram_floor_mib, 0)]
+    return fits
+
+
+def _best(fits: list[dict], objective: str) -> dict | None:
+    """The fastest row at the smallest measured context (less VRAM), then the live-confirmation rule: a row that lost
+    an A/B gives way to the row that beat it, if that row is among the candidates."""
     if not fits:
         return None
-    smallest = min(r["ctx"] for r in fits)                 # the smallest measured context that fits: less VRAM
-    return max((r for r in fits if r["ctx"] == smallest), key=lambda r: (r.get(key) or 0))
+    k = "tg_tps" if objective == "tg" else "pp_tps"
+    smallest = min(r["ctx"] for r in fits)
+    pool = [r for r in fits if r["ctx"] == smallest]
+    best = max(pool, key=lambda r: (r.get(k) or 0))
+    seen = set()
+    while (c := best.get("confirmed") or {}).get("outcome") == "replaced" and c.get("by") and id(best) not in seen:
+        seen.add(id(best))
+        winner = next((r for r in pool if key(r) == c["by"]), None)
+        if winner is None:
+            break
+        best = winner
+    return best
+
+
+def choose(rows: list[dict], need: int, objective: str = "tg", vram_free_mib: int | None = None,
+           margin_mib: int = 300, *, exact_only: bool = False, stock: bool = False, ram_free_mib: int | None = None,
+           ram_floor_mib: int = 6144) -> dict | None:
+    return _best(candidates(rows, need, vram_free_mib, margin_mib, exact_only=exact_only, stock=stock,
+                            ram_free_mib=ram_free_mib, ram_floor_mib=ram_floor_mib), objective)
+
+
+def runner_up(rows: list[dict], chosen: dict, need: int, objective: str = "tg", vram_free_mib: int | None = None,
+              margin_mib: int = 300, *, exact_only: bool = False, stock: bool = False, ram_free_mib: int | None = None,
+              ram_floor_mib: int = 6144, allow_non_exact: bool = False) -> dict | None:
+    """The best row with another launch configuration under the same filters: what a live A/B confirms the plan
+    against. An exact-class plan only ever meets exact-class runners-up, unless non-exact rows were allowed (--stock or
+    --allow-non-exact): a faster answer that is a different answer is not a confirmation."""
+    fits = candidates(rows, need, vram_free_mib, margin_mib, exact_only=exact_only, stock=stock,
+                      ram_free_mib=ram_free_mib, ram_floor_mib=ram_floor_mib)
+    fits = [r for r in fits if key(r) != key(chosen)]
+    if exact_class(chosen) and not allow_non_exact:
+        fits = [r for r in fits if exact_class(r)]
+    k = "tg_tps" if objective == "tg" else "pp_tps"
+    return max(fits, key=lambda r: (r.get(k) or 0), default=None)
+
+
+def next_smaller(rows: list[dict], current: dict, need: int, objective: str = "tg", *, pressure: set[str],
+                 vram_free_mib: int | None, ram_free_mib: int | None, margin_mib: int = 300,
+                 ram_floor_mib: int = 6144, exact_only: bool = False, stock: bool = False,
+                 allow_non_exact: bool = False) -> dict | None:
+    """The row the governor restarts on: the fastest that fits the request and the filters, takes less of the memory
+    under pressure than the current row, and fits what stopping the current server leaves free (the readings are
+    taken while it runs, so its own share comes back). An exact-class row is only replaced by an exact-class row unless
+    non-exact rows were allowed. None: nothing smaller fits, and the governor gives up rather than guess."""
+    cur_v = vram_share(current)[0] or 0
+    cur_r = ram_need_mib(current)
+    fits = candidates(rows, need, exact_only=exact_only, stock=stock)
+    fits = [r for r in fits if key(r) != key(current)]
+    if exact_class(current) and not allow_non_exact:
+        fits = [r for r in fits if exact_class(r)]
+    if "vram" in pressure:
+        fits = [r for r in fits if (s := vram_share(r)[0]) is not None and s < cur_v]
+    if "ram" in pressure:
+        fits = [r for r in fits if ram_need_mib(r) < cur_r]
+    if vram_free_mib is not None:
+        fits = [r for r in fits if (s := vram_share(r)[0]) is not None and s + margin_mib <= vram_free_mib + cur_v]
+    if ram_free_mib is not None:
+        fits = [r for r in fits if ram_need_mib(r) - cur_r + ram_floor_mib <= ram_free_mib
+                and pinned_mib(r) <= max(ram_free_mib + cur_r - ram_floor_mib, 0)]
+    return _best(fits, objective)
 
 
 def to_config(row: dict) -> Config:
