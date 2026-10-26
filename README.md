@@ -2,7 +2,8 @@
 
 **Run local mixture-of-experts models by what your machine can actually do, measured, not guessed.**
 
-Marian is named after a popular Polish given name. Status: **M1.1 in progress, pre-release** (24/10/2026). The full
+Marian is named after a popular Polish given name. Status: **pre-release**; M1.1 and M1.2 measured (24/10/2026), the
+Python side of M1.3's calibration v1 built (27/10/2026). The full
 story, every measured table and the mistakes are in [docs/JOURNEY.md](docs/JOURNEY.md).
 
 ## What it does
@@ -16,8 +17,9 @@ Marian has two layers.
    few of their "experts" for each token. M1 keeps the most-used experts in GPU memory (VRAM) **one expert at a time,
    not one whole layer at a time**, and fetches the rest from system RAM or the SSD as fast as the machine allows. It
    builds on upstream llama.cpp's own expert cache (`--moe-cache-mib`). It is **exact by default**: speed-ups that can
-   change an answer will only ever be opt-in switches. Self-calibration to the machine at hand is the design goal; the
-   calibration itself (milestone M1.3) is not built yet.
+   change an answer will only ever be opt-in switches. Self-calibration to the machine at hand is the design goal;
+   the Python side of calibration v1 (milestone M1.3) is built and tested offline, and has run on one machine only;
+   its memory governor, live confirmation and learned counts are not built yet.
 
 **Minimum spec we are designing for:** 32 GB of RAM plus a GPU with 8 GB of VRAM (a project decision of
 22/10/2026). The design is in [docs/design/DESIGN-M1.md](docs/design/DESIGN-M1.md).
@@ -87,7 +89,8 @@ These are why a measuring tool matters. Sources and conditions for every figure 
 | P0 / P0b trace (`MARIAN_MOE_TRACE`, `MARIAN_MOE_TRACE_FILLS`) | Marian | built, used in every M1 run |
 | Exactness floor (per-group slot floor, refusal below it) | Marian | built, passed its test |
 | P3 miss source (`--moe-miss-source mmap\|ring\|tier`, `--moe-tier-mib`, `--moe-ring-mib`) | Marian | built, measured, opt-in (default stays `mmap`) |
-| Ranked core, warm start, TinyLFU doorkeeper in VRAM (P2), calibration (M1.3), drain removal, prefetch | Marian | designed, not built |
+| Calibration v1, Python side (M1.3): cache arms in the profiler (VRAM cliff finder, ring and tier ladder inside a RAM envelope), exact-class per row, calibration gate, launch checks, `serve --stock` rollback, `marian diag` | Marian | built, offline tests pass; one smoke run on one machine |
+| Memory governor with supervised restart, live confirmation, learned counts (rest of M1.3); ranked core, warm start, TinyLFU doorkeeper in VRAM (P2), drain removal, prefetch | Marian | designed, not built |
 
 The patches are in [docs/m1.0/patches](docs/m1.0/patches) (P0) and [docs/m1.1/patches](docs/m1.1/patches) (0001
 exactness floor, 0002 fill trace, 0003 P3 minimal), as `git format-patch` files on top of `a37cc461`.
@@ -188,7 +191,13 @@ Be warned; this is research code.
   supported.
 - **Upstream moves fast.** The cache is experimental upstream and changed three times in two weeks; the fork is not
   rebased (43 upstream commits since the pin, one of which changes the Swift model's attention graph).
-- **M0 plans whole-layer splits only** and does not yet restore a cache budget into its launch configuration.
+- **Calibration v1 measures, then trusts its measurement.** The planner now restores cache budgets, miss sources and
+  tier sizes into the launch configuration, and `serve` checks the chosen row against the VRAM and RAM free at
+  launch. But nothing watches memory after launch yet (no governor, no supervised restart), no live confirmation run
+  checks the winner against the runner-up, and the cliff finder assumes decode speed rises with the cache budget
+  until the cliff. The cache arms have run once on one machine (the reference laptop), with one model, and with
+  the cache capped at 2,500 MiB so that the miss sources had misses to serve: the bisection itself has only run
+  against synthetic speed and VRAM curves in the tests, not against a real paging cliff.
 - The build carries no C++ exception unwinding (`/EHsc` is off, inherited from the measured builds).
 
 ## Status
@@ -198,7 +207,9 @@ Be warned; this is research code.
 | M0 | done, 21/10/2026 | profiler, planner, launcher; first measured profile in `profiles/` |
 | M1.0 | measured, 22-24/10/2026 | upstream cache vs stock on Swift 1.5 IQ2_XS; copy probe; 8 GB floor arms; gate and control models |
 | M1.1 | in progress | exactness floor PASS; trace-replay probe GO; P3 verify run PASS (11/11); P3 server arms measured 24/10/2026 (two rounds): the tier doubles decode, exact, but costs prefill about 3x; controls and the Maya drive test done; replay = server exactly (+0.00 points, the M1.1 exit check); five-round confirmation: decode exit met (E44); log-probability exactness against all-VRAM (E45) |
-| M1.2 onwards | not started | ranked policy, calibration, real-hardware validation (see [DESIGN-M1 section 10](docs/design/DESIGN-M1.md)) |
+| M1.2 | tooling done, policy deprioritised | the routing-id trace and the exact replay (A19); the ranked policy lost to upstream's SLRU on the real trace ([JOURNEY section 7](docs/JOURNEY.md#7-what-is-next)) |
+| M1.3 | Python side built, 27/10/2026 | `marian calibrate`, cache arms (cliff finder, miss sources, RAM envelope), calibration gate, launch checks, `serve --stock`, `--exact-only`, `marian diag`; 74 offline tests pass. One GPU smoke on the reference laptop (27/10/2026: Gemma 4 26B-A4B IQ3_XXS, context 4096, 218 s): the gate refused before calibration, the walk, two cache budgets, the ring and two tier sizes ran, `plan`, `serve --dry-run` and `serve --stock --dry-run` passed. Not built: governor with supervised restart, live confirmation, learned counts |
+| M1.4 onwards | not started | real-hardware validation (see [DESIGN-M1 section 10](docs/design/DESIGN-M1.md)) |
 
 **M1 exit criteria, and where each stands** (reference laptop, Swift 1.5 IQ2_XS):
 
@@ -245,16 +256,29 @@ The confirmation, five interleaved rounds (T S | S T | T S | S T | T S), all-tok
 
 Everything else, with conditions and what each table taught us: [docs/JOURNEY.md](docs/JOURNEY.md).
 
-## Quick start (M0; standard library only, Python 3.10+)
+## Quick start (M0 and M1.3; standard library only, Python 3.10+)
 
 ```
 python -m marian machine                                   # GPU, VRAM, RAM, driver; a fingerprint, no hostname
 python -m marian inspect model.gguf                        # architecture, layers, experts, MoE or dense
-python -m marian profile model.gguf --engine path/to/llama-server --ctx 4096,8192,16384 --kv f16,q8_0
+python -m marian calibrate model.gguf --engine path/to/llama-server     # the quick profile: one context, one KV type
+python -m marian profile model.gguf --engine path/to/llama-server --ctx 4096,8192,16384 --kv f16,q8_0   # the full one
 python -m marian plan model.gguf --need 6000               # the fastest measured configuration for 6,000 tokens
 python -m marian plan model.gguf --need 6000 --fit-now --json   # ... that also fits the VRAM free right now, as JSON
-python -m marian serve model.gguf --engine path/to/llama-server --need 6000 --fit-now
+python -m marian plan model.gguf --need 6000 --exact-only  # ... computing every expert on the GPU (answers unchanged)
+python -m marian serve model.gguf --engine path/to/llama-server --need 6000     # refuses until this machine is calibrated
+python -m marian serve model.gguf --engine path/to/llama-server --need 6000 --calibrate   # calibrate first, then serve
+python -m marian serve model.gguf --engine path/to/llama-server --need 6000 --stock       # rollback: plain upstream flags
+python -m marian diag diag.zip model.gguf --engine path/to/llama-server   # a bundle to share: no prompts, home as ~
 ```
+
+`serve` will not launch on a machine that has not run its pre-tuning tests: without a profile for this machine, model
+and engine it refuses and says how to calibrate (or calibrates first with `--calibrate`). It then checks the chosen
+row before launching: the model file is the one profiled, the engine is the build that was measured (and has every
+flag the row passes), and the VRAM free now covers the row's share plus a margin, and the RAM available covers any
+pinned tier plus a floor (6 GiB by default). A failure is a reason and exit code 2 (`--json`: one object;
+`--dry-run` checks without launching). `--stock` serves only plain upstream placement (`-ncmoe` / `-ngl`, no expert
+cache, no Marian flag) from the same profile, and only warns if the engine is another build.
 
 `plan` refuses when nothing measured fits: it never extrapolates. Each profiled point records the GPU memory other
 programs were already using, so `--fit-now` (or `--vram-free MIB`) checks the model's own share against what is free
@@ -275,14 +299,25 @@ number of tokens, and records prompt and generation speed plus peak VRAM and the
 **overflow** when VRAM is within a margin of full or speed collapses against the best point so far; the walk stops
 there. Profiles are JSON files named by machine fingerprint, model id and engine.
 
+On a Marian build (its `--help` lists `--moe-miss-source`, `--moe-tier-mib` and `--moe-ring-mib`) and a MoE model,
+each context and KV type also gets **cache arms** (M1.3). A cliff finder bisects `--moe-cache-mib` between the
+exactness floor (below it the fork refuses to start, which is recorded as a refusal, not a crash) and the budget that
+caches every expert, capped by the VRAM left beside the rest of the model. At the best budget it measures the staging
+ring and a small ladder of pinned RAM tier sizes, never pinning more than the RAM available minus a floor, because
+pinned memory is RAM the desktop cannot page. Each row records whether it is **exact-class** (every expert computed
+on the GPU: full offload or any cache arm) or not (stock `-ncmoe` above 0, which changes answers), the RAM available
+before and at its lowest, commit headroom, the server's peak working set and commit, and what the fork's log said.
+`--max-cache-mib` caps the cache, `--ram-floor` sets the floor, `--no-cache` skips the arms.
+
 ## Roadmap
 
 From [DESIGN-M1 section 10](docs/design/DESIGN-M1.md), reshaped by what M1.0 measured:
 
 - **M1.2:** a ranked policy (ranked core, warm start, doorkeeper, transient slots, budgets by need), with a bitwise
   invariance test.
-- **M1.3:** calibration v1: probes with a safety envelope, a VRAM cliff finder, the plan, a live confirmation, a
-  memory governor, and a `--stock` rollback.
+- **M1.3:** calibration v1. Built (Python side): the VRAM cliff finder, miss sources in a RAM safety envelope, the
+  plan, the calibration gate, launch checks, the `--stock` rollback and the diagnostics bundle. Still to build: a
+  live confirmation, a memory governor with supervised restart, learned counts.
 - **M1.4:** real hardware: a real 8 GB GPU, Linux, a slower link and drive.
 - **M2:** the full expert source (prefill included), removing the per-layer drain, look-ahead prefetch.
 - **M3 to M5:** verified speculation, opt-in answer-changing switches with blind quality gates, and prefill work.
