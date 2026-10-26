@@ -138,10 +138,12 @@ against the primary sources (arXiv abstract pages and API, Crossref for DOIs, th
   support (#30112) and the selective-copy refactor (#29943), and Evan Huus ([@eapache](https://github.com/eapache))
   opened the SLRU policy (#30637).
 - **Strata** (Niko1221 and contributors) and **Project Maya** (Peasant Smith / mw00 and needmorevram), both MIT.
-- The publishers of the public weights we measured: **Qwen** (Qwen3.5-9B; Qwen3.8-Flash-Next, the base of the
-  Swift 1.5 IQ2_XS quantisation, whose publisher we still need to confirm), **Google** (Gemma 4 26B-A4B-it, Gemma 4
-  E4B-it QAT), **NVIDIA** (NVIDIA-Nemotron-3.5-Bolt-E4B-4GB), **unsloth** (GGUF quantisations of Gemma 4 26B-A4B-it
-  and Qwen3.5-9B) and **GrootTeam** (Groot-19B-A3B-261023).
+- The publishers of the public weights we measured: **Qwen** (Qwen3.5-9B; Qwen3.8-Flash-Next), **UkisAI** (the
+  Swift 1.5 IQ2_XS quantisation of Qwen3.8-Flash-Next,
+  [ukisai/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-GGUF](https://huggingface.co/ukisai/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-GGUF),
+  Swift Open License v1.0 with the Qwen parts under the Qwen Community License 1.0, made with **IST-DASLab**'s GSQ and
+  RCO methods), **Google** (Gemma 4 26B-A4B-it, Gemma 4 E4B-it QAT), **NVIDIA** (NVIDIA-Nemotron-3.5-Bolt-E4B-4GB),
+  **unsloth** (GGUF quantisations of Gemma 4 26B-A4B-it and Qwen3.5-9B) and **GrootTeam** (Groot-19B-A3B-261023).
 - **Astra and Fable**, AI models consulted for design ideas (tagged [AS] and [FB] in the design); **Sol**, the AI model
   that wrote the research pack; and **Sol, Luna and Astra**, who critiqued the first design (24 items, all folded in).
 - **Chris (Krystof Tyl)**, the human partner, and **Alder**, who wrote M0 and asked the question that the gate
@@ -281,7 +283,12 @@ there. Profiles are JSON files named by machine fingerprint, model id and engine
 
 ## Roadmap
 
-From [DESIGN-M1 section 10](docs/design/DESIGN-M1.md), reshaped by what M1.0 measured:
+The living roadmap, with the evidence behind each item and the dev debt, is
+[docs/ROADMAP.md](docs/ROADMAP.md) (updated 27/10/2026 from scans of upstream llama.cpp and the wider ecosystem). In
+short: rebase onto current upstream; make prefill the main target (Swift's 26.8 GiB per-layer embedding table shares
+the page cache with the experts, and prefill misses still fault through the memory map); calibration v1 with Windows
+pinning and RAM-safety rules; then the 8 GB laptop under RAM pressure. The milestones from
+[DESIGN-M1 section 10](docs/design/DESIGN-M1.md), reshaped by what M1.0 measured:
 
 - **M1.2:** a ranked policy (ranked core, warm start, doorkeeper, transient slots, budgets by need), with a bitwise
   invariance test.
