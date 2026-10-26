@@ -1,5 +1,6 @@
 @echo off
-rem Marian M1.0: llama.cpp a37cc46104eb50900d5ab4a9ba02a0abdac039db + P0 trace patch (branch marian/m1.0),
+rem Marian M1.0: llama.cpp 63b4b303bd87456adc2f09d56c7e1f74e9e26673 + P0 trace patch (the pin since 27/10/2026; the
+rem M1.0 runs were built at a37cc46104eb50900d5ab4a9ba02a0abdac039db, branch marian/m1.0),
 rem CUDA for sm_89 (RTX 4090 Laptop), on the reference laptop. Toolchain and network-off switches as <baseline>\build.bat.
 setlocal
 set "R=<research>"

@@ -1,6 +1,7 @@
 @echo off
-rem Marian M1.1: llama.cpp branch marian/m1.1 (a37cc461 + P0 trace + M1.1 patches) into build-m1.1, so the measured
-rem M1.0 binaries in <research>\build stay untouched. Same toolchain and network-off switches as build.bat.
+rem Marian M1.1: llama.cpp branch marian/m1.1 (63b4b303 + P0 trace + M1.1 patches; the M1.1 runs used a37cc461)
+rem into build-m1.1, so the measured M1.0 binaries in <research>\build stay untouched. Same toolchain and network-off
+rem switches as build.bat.
 rem Usage: build_m11.bat [jobs=8] [probe|selftest]
 rem   probe    builds only tools\replay_probe.cu (nvcc), not llama.cpp
 rem   selftest builds only tools\p3_selftest.cpp (cl, CPU only; needs a finished llama.cpp build for ggml-base/ggml-cpu)

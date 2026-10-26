@@ -12,7 +12,7 @@ Marian has two layers.
 1. **M0, a measuring tool** (Python, standard library only). It measures how a model behaves on *this* machine:
    speed and memory for each context size, KV-cache type and GPU/CPU split. Then it picks the fastest configuration
    that fits a request and launches it. It never extrapolates: if nothing measured fits, it says so.
-2. **M1, a thin fork of llama.cpp** (pinned at upstream commit [`a37cc461`](https://github.com/ggml-org/llama.cpp/commit/a37cc461)). Mixture-of-experts (MoE) models only use a
+2. **M1, a thin fork of llama.cpp** (pinned at upstream commit [`63b4b303`](https://github.com/ggml-org/llama.cpp/commit/63b4b303)). Mixture-of-experts (MoE) models only use a
    few of their "experts" for each token. M1 keeps the most-used experts in GPU memory (VRAM) **one expert at a time,
    not one whole layer at a time**, and fetches the rest from system RAM or the SSD as fast as the machine allows. It
    builds on upstream llama.cpp's own expert cache (`--moe-cache-mib`). It is **exact by default**: speed-ups that can
@@ -74,7 +74,7 @@ These are why a measuring tool matters. Sources and conditions for every figure 
  |    exactness floor  every expert group keeps enough slots for the largest step     |
  |    P3 miss source   unbuffered reads -> pinned staging ring -> pinned RAM tier     |
  +------------------------------------------------------------------------------------+
- |  upstream llama.cpp at a37cc461: --moe-cache-mib per-expert VRAM cache (SLRU),     |
+ |  upstream llama.cpp at 63b4b303: --moe-cache-mib per-expert VRAM cache (SLRU),     |
  |  MUL_MAT_ID on the cache bank, selective expert copy for large batches             |
  +------------------------------------------------------------------------------------+
 ```
@@ -90,7 +90,7 @@ These are why a measuring tool matters. Sources and conditions for every figure 
 | Ranked core, warm start, TinyLFU doorkeeper in VRAM (P2), calibration (M1.3), drain removal, prefetch | Marian | designed, not built |
 
 The patches are in [docs/m1.0/patches](docs/m1.0/patches) (P0) and [docs/m1.1/patches](docs/m1.1/patches) (0001
-exactness floor, 0002 fill trace, 0003 P3 minimal), as `git format-patch` files on top of `a37cc461`.
+exactness floor, 0002 fill trace, 0003 P3 minimal), as `git format-patch` files on top of `63b4b303`.
 
 ## Inspirations and prior art
 
@@ -186,8 +186,12 @@ Be warned; this is research code.
   prompt set.
 - **One sequence at a time.** Concurrent requests change the kernels and memory peaks; multi-sequence serving is not
   supported.
-- **Upstream moves fast.** The cache is experimental upstream and changed three times in two weeks; the fork is not
-  rebased (43 upstream commits since the pin, one of which changes the Swift model's attention graph).
+- **Upstream moves fast.** The cache is experimental upstream and changed three times in two weeks. On 27/10/2026 the
+  fork was rebased from `a37cc461` to `63b4b303` (107 upstream commits, mechanical fixes only) and re-checked (E48):
+  the Gemma cache arms are still log-probability-identical to all-VRAM, and the Swift tier still meets the decode exit
+  in one round (15.1 tok/s warm, 12.6 after a 16K prompt, against 14.4-14.6 and 13.4-13.7 at the old pin). Three of
+  those commits change the Swift model's numerics, so Swift's texts differ from the runs at `a37cc461`; measurements
+  dated before 27/10/2026 were taken at the old pin.
 - **M0 plans whole-layer splits only** and does not yet restore a cache budget into its launch configuration.
 - The build carries no C++ exception unwinding (`/EHsc` is off, inherited from the measured builds).
 
