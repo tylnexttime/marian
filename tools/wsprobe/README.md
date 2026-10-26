@@ -48,7 +48,7 @@ wsprobe --wait-image C:\path\to\llama-server.exe --wait-timeout 600 --ranges ran
 ```
 
 `--wait-image` waits for a process with that image (full path, or file name) created after the probe started, and
-attaches within about 20 ms of its creation; `--pid N` attaches to a running process. The probe exits when the process
+attaches within tens of milliseconds of its creation (10-31 ms in E49); `--pid N` attaches to a running process. The probe exits when the process
 does. `--once [--dump-runs runs.json]` takes one sample (and, at stride 1, writes the resident runs as file offsets).
 
 Output, one JSON object per line: a `start` line (pid, stride, attach delay, mapped MiB per kind, shards), a `views`
