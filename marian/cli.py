@@ -3,8 +3,11 @@
     python -m marian machine
     python -m marian inspect MODEL.gguf
     python -m marian profile MODEL.gguf --engine PATH/llama-server --ctx 4096,8192,16384 --kv f16,q8_0 [--step 2]
-    python -m marian plan MODEL.gguf --need 6000 [--objective pp] [--fit-now | --vram-free MIB] [--json]
-    python -m marian serve MODEL.gguf --engine PATH/llama-server --need 6000 [--port 9951] [--fit-now]
+    python -m marian calibrate MODEL.gguf --engine PATH/llama-server [--ctx 4096] [--kv f16]   (the quick profile)
+    python -m marian plan MODEL.gguf --need 6000 [--objective pp] [--fit-now | --vram-free MIB] [--exact-only | --stock] [--json]
+    python -m marian serve MODEL.gguf --engine PATH/llama-server --need 6000 [--port 9951] [--calibrate] [--exact-only |
+                           --stock] [--dry-run] [--json]
+    python -m marian diag OUT.zip [MODEL.gguf] [--engine PATH/llama-server] [--need 6000]
     python -m marian geometry SHARD.gguf [SHARD.gguf ...] -o MODEL.geometry.json
     python -m marian replay TAG.ids.bin --geometry MODEL.geometry.json --budget-mib 9400 [--requests TAG.requests.jsonl]
                             [--trace TAG.trace.csv] [--fills TAG.fills.csv] [--md OUT.md] [--json OUT.json]
@@ -13,6 +16,10 @@
 `--fit-now` re-checks each measured row against the VRAM free at this moment (see plan.py); `--vram-free` gives that
 figure instead of measuring it. `plan --json` prints one JSON object on stdout for other programs: {"ok": true, "row",
 "config", "server_args", "vram_basis", ...} or {"ok": false, "reason", ...}; the exit code is 0 or 2 as without it.
+
+`serve` (M1.3) refuses without a profile for this machine, model and engine unless `--calibrate` runs the quick one
+first, always checks the chosen row against the VRAM and RAM free now, and runs the launch checks of launch.py; a
+failure is a reason and exit 2 (`--json`: one object). `--stock` is the rollback: plain upstream placement only.
 """
 from __future__ import annotations
 
@@ -25,7 +32,9 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import geometry, gguf, idstrace, machine, plan, profile, replay, synth
+from . import launch
 from .engines import LlamaCpp
+from .profile import CacheOptions, sha256_head
 
 
 def profiles_dir() -> Path:
@@ -51,6 +60,13 @@ def main(argv=None) -> int:
     p.add_argument("--ctx", default="4096,8192,16384,32768"); p.add_argument("--kv", default="f16,q8_0")
     p.add_argument("--step", type=int, default=2); p.add_argument("--threads", type=int)
     p.add_argument("--n-predict", type=int, default=64); p.add_argument("--port", type=int, default=9951)
+    _cache_args(p, tier_steps=3)
+    p = sub.add_parser("calibrate", help="the quick first-launch profile: one context, one KV type, cache arms on a Marian build")
+    p.add_argument("model", type=Path); p.add_argument("--engine", required=True)
+    p.add_argument("--ctx", type=int, default=4096); p.add_argument("--kv", default="f16")
+    p.add_argument("--step", type=int, default=2); p.add_argument("--threads", type=int)
+    p.add_argument("--n-predict", type=int, default=32); p.add_argument("--port", type=int, default=9951)
+    _cache_args(p, tier_steps=2)
     for name in ("plan", "serve"):
         p = sub.add_parser(name); p.add_argument("model", type=Path); p.add_argument("--need", type=int, required=True)
         p.add_argument("--objective", choices=["tg", "pp"], default="tg")
@@ -58,11 +74,19 @@ def main(argv=None) -> int:
         g.add_argument("--fit-now", action="store_true", help="re-check each row against the VRAM free now")
         g.add_argument("--vram-free", type=int, metavar="MIB", help="re-check each row against this much free VRAM")
         p.add_argument("--margin", type=int, default=300, metavar="MIB", help="VRAM kept free on top of a row's share")
+        p.add_argument("--ram-floor", type=int, default=6144, metavar="MIB", help="RAM left available beside pinned memory")
+        g = p.add_mutually_exclusive_group()
+        g.add_argument("--exact-only", action="store_true", help="only rows that compute every expert on the GPU")
+        g.add_argument("--stock", action="store_true", help="only plain upstream placement (-ncmoe/-ngl): the rollback")
         p.add_argument("--port", type=int, default=9951)
-        if name == "plan":
-            p.add_argument("--json", action="store_true", help="one JSON object on stdout, for other programs")
-        else:
+        p.add_argument("--json", action="store_true", help="one JSON object on stdout, for other programs")
+        if name == "serve":
             p.add_argument("--engine", required=True)
+            p.add_argument("--calibrate", action="store_true", help="no profile yet: run the quick calibration, then serve")
+            p.add_argument("--dry-run", action="store_true", help="gate, plan and launch checks only; start nothing")
+    p = sub.add_parser("diag", help="a diagnostics bundle (zip): machine, profiles, plan, log tails; no prompts or paths")
+    p.add_argument("out", type=Path); p.add_argument("model", type=Path, nargs="?")
+    p.add_argument("--engine"); p.add_argument("--need", type=int, default=4096); p.add_argument("--port", type=int, default=9951)
     p = sub.add_parser("geometry", help="expert geometry of a MoE GGUF (headers only) as JSON, for replay")
     p.add_argument("shards", type=Path, nargs="+"); p.add_argument("-o", "--out", type=Path)
     p = sub.add_parser("replay", help="replay a routing-id trace through expert-cache and RAM-tier policies")
@@ -107,58 +131,109 @@ def main(argv=None) -> int:
     elif a.cmd == "profile":
         eng = LlamaCpp(a.engine, a.port)
         out = profile.run(a.model, eng, [int(x) for x in a.ctx.split(",")], a.kv.split(","), a.step, a.threads,
-                          PROFILES, a.n_predict)
+                          PROFILES, a.n_predict, cache=_cache_opts(a))
         print(f"profile written: {out}")
+    elif a.cmd == "calibrate":
+        eng = LlamaCpp(a.engine, a.port)
+        out = profile.run(a.model, eng, [a.ctx], [a.kv], a.step, a.threads, PROFILES, a.n_predict, cache=_cache_opts(a))
+        print(f"calibration written: {out}")
+    elif a.cmd == "diag":
+        eng = LlamaCpp(a.engine, a.port) if a.engine else None
+        names = launch.write_diag(a.out, PROFILES, a.model, eng, a.need, a.port)
+        print(f"diagnostics written: {a.out} ({len(names)} files; no prompt text, home shown as ~)")
     elif a.cmd in ("plan", "serve"):
-        rows = plan.load(PROFILES, a.model)
-        free = a.vram_free
-        if a.fit_now:
-            now = machine.gpu_memory_free_mib()
-            free = now[0] if now else None
-            if free is None:
-                return _plan_fail(a, "--fit-now: could not read free VRAM (no nvidia-smi?)", rows, None)
-        row = plan.choose(rows, a.need, a.objective, vram_free_mib=free, margin_mib=a.margin)
-        if row is None:
-            if not rows:
-                why = f"no profile for {a.model.name} on this machine; run `marian profile` first"
-            elif free is not None and plan.choose(rows, a.need, a.objective) is not None:
-                why = (f"measured configurations fit {a.need} tokens, but none fits the {free} MiB of VRAM free now "
-                       f"with a {a.margin} MiB margin")
-            else:
-                why = (f"no measured configuration fits {a.need} tokens on this machine for {a.model.name}; "
-                       "run `marian profile` with a larger --ctx first")
-            return _plan_fail(a, why, rows, free)
-        clean = {k: v for k, v in row.items() if not k.startswith("_")}
-        if getattr(a, "json", False):
-            cfg = plan.to_config(row)
-            print(json.dumps({"ok": True, "model": a.model.name, "need": a.need, "objective": a.objective,
-                              "vram_free_mib": free, "margin_mib": a.margin if free is not None else None,
-                              "vram_basis": plan.vram_share(row)[1], "row": clean, "config": asdict(cfg),
-                              "server_args": LlamaCpp("llama-server", a.port).command(a.model, cfg)[1:],
-                              "profile_file": row.get("_file")}))
-            return 0
-        print(json.dumps(clean))
-        if a.cmd == "serve":
-            eng = LlamaCpp(a.engine, a.port)
-            ok, why = eng.start(a.model, plan.to_config(row), PROFILES / "serve.log")
-            print(why)
-            if not ok:
-                return 2
-            print(f"serving {a.model.name} on {eng.base} (Ctrl+C stops)")
-            try:
-                while eng.proc and eng.proc.poll() is None:
-                    time.sleep(2)
-            except KeyboardInterrupt:
-                pass
-            finally:
-                eng.stop()
+        return _plan_or_serve(a)
     return 0
 
 
-def _plan_fail(a, why: str, rows: list[dict], free) -> int:
+def _cache_args(p, tier_steps: int) -> None:
+    p.add_argument("--no-cache", action="store_true", help="no cache arms, even on a Marian build")
+    p.add_argument("--max-cache-mib", type=int, help="never offer the expert cache more VRAM than this")
+    p.add_argument("--ram-floor", type=int, default=6144, metavar="MIB", help="never pin more than (RAM available - this)")
+    p.add_argument("--tier-steps", type=int, default=tier_steps, help="pinned RAM tier sizes to measure")
+
+
+def _cache_opts(a) -> CacheOptions:
+    return CacheOptions(enabled=not a.no_cache, max_cache_mib=a.max_cache_mib, ram_floor_mib=a.ram_floor,
+                        tier_steps=a.tier_steps)
+
+
+def _plan_or_serve(a) -> int:
+    serve = a.cmd == "serve"
+    mid = sha256_head(a.model)
+    docs = plan.load_docs(PROFILES, a.model, mid)
+    eng = LlamaCpp(a.engine, a.port) if serve else None
+    if serve and not plan.rows_of(docs, eng.name):                       # the calibration gate
+        if not a.calibrate:
+            return _plan_fail(a, launch.gate_reason(a.model, eng.name), [], None, gate="no_calibration")
+        ctx = launch.quick_ctx(a.need)
+        print(f"no calibration for this machine, model and engine yet: calibrating at context {ctx} first",
+              file=sys.stderr)
+        profile.run(a.model, eng, [ctx], ["f16"], 2, None, PROFILES, 32,
+                    cache=CacheOptions(ram_floor_mib=a.ram_floor, tier_steps=2))
+        docs = plan.load_docs(PROFILES, a.model, mid)
+    rows = plan.rows_of(docs, eng.name if eng else None)
+    free, ram_free = a.vram_free, None
+    if a.fit_now or serve:                       # serve always checks the row against the memory free now
+        if free is None:
+            now = machine.gpu_memory_free_mib()
+            free = now[0] if now else None
+            if free is None and a.fit_now:
+                return _plan_fail(a, "--fit-now: could not read free VRAM (no nvidia-smi?)", rows, None)
+        ram_free = machine.ram_mib()[1]
+    filters = dict(exact_only=a.exact_only, stock=a.stock)
+    row = plan.choose(rows, a.need, a.objective, vram_free_mib=free, margin_mib=a.margin, ram_free_mib=ram_free,
+                      ram_floor_mib=a.ram_floor, **filters)
+    if row is None:
+        why = launch.explain(rows, a.need, a.objective, a.model.name, free=free, margin=a.margin, ram_free=ram_free,
+                             ram_floor=a.ram_floor, **filters)
+        return _plan_fail(a, why, rows, free)
+    clean = {k: v for k, v in row.items() if not k.startswith("_")}
+    cfg = plan.to_config(row)
+    warnings: list[str] = []
+    if serve:
+        doc = next(d for p, d in docs if p.name == row["_file"])
+        reasons, warnings = launch.check(row, doc, a.model, mid, eng, stock=a.stock, vram_free_mib=free,
+                                         margin_mib=a.margin, ram_free_mib=ram_free, ram_floor_mib=a.ram_floor)
+        if reasons:
+            return _plan_fail(a, "launch checks failed: " + "; ".join(reasons), rows, free,
+                              reasons=reasons, warnings=warnings, row=clean)
+    if a.json:
+        print(json.dumps({"ok": True, "model": a.model.name, "need": a.need, "objective": a.objective,
+                          "vram_free_mib": free, "margin_mib": a.margin if free is not None else None,
+                          "ram_available_mib": ram_free, "vram_basis": plan.vram_share(row)[1],
+                          "exact_class": plan.exact_class(row), "stock": plan.is_stock(row), "warnings": warnings,
+                          "row": clean, "config": asdict(cfg),
+                          "server_args": LlamaCpp("llama-server", a.port).command(a.model, cfg)[1:],
+                          "profile_file": row.get("_file")}))
+    else:
+        print(json.dumps(clean))
+        for w in warnings:
+            print(f"warning: {w}", file=sys.stderr)
+        if not plan.exact_class(row):
+            print("note: this configuration computes some experts on the CPU, so its answers can differ from "
+                  "all-on-GPU (--exact-only excludes it)", file=sys.stderr)
+    if not serve or a.dry_run:
+        return 0
+    ok, why = eng.start(a.model, cfg, PROFILES / "serve.log")
+    print(why, file=sys.stderr if a.json else sys.stdout)
+    if not ok:
+        return 2
+    print(f"serving {a.model.name} on {eng.base} (Ctrl+C stops)", file=sys.stderr if a.json else sys.stdout)
+    try:
+        while eng.proc and eng.proc.poll() is None:
+            time.sleep(2)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        eng.stop()
+    return 0
+
+
+def _plan_fail(a, why: str, rows: list[dict], free, **extra) -> int:
     if getattr(a, "json", False):
         print(json.dumps({"ok": False, "model": a.model.name, "need": a.need, "objective": a.objective,
-                          "vram_free_mib": free, "reason": why, "rows_measured": len(rows)}))
+                          "vram_free_mib": free, "reason": why, "rows_measured": len(rows), **extra}))
     else:
         print(why, file=sys.stderr)
     return 2
