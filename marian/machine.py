@@ -62,25 +62,87 @@ def gpu_memory_free_mib() -> list[int]:
     return [int(r[0]) for r in nvidia_smi("memory.free") if r and r[0].isdigit()]
 
 
-def ram_mib() -> tuple[int, int]:
-    """(total, available) MiB. Windows via GlobalMemoryStatusEx; elsewhere /proc/meminfo."""
-    if os.name == "nt":
-        class MEMORYSTATUSEX(ctypes.Structure):
-            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
-                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
-                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
-                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
-                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
-        m = MEMORYSTATUSEX()
-        m.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
-        return m.ullTotalPhys // 2**20, m.ullAvailPhys // 2**20
+def _memstatus():
+    class MEMORYSTATUSEX(ctypes.Structure):
+        _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+    m = MEMORYSTATUSEX()
+    m.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
+    return m
+
+
+def _meminfo() -> dict:
     info = {}
     with open("/proc/meminfo") as f:
         for line in f:
             k, v = line.split(":", 1)
             info[k] = int(v.split()[0])
+    return info
+
+
+def ram_mib() -> tuple[int, int]:
+    """(total, available) MiB. Windows via GlobalMemoryStatusEx; elsewhere /proc/meminfo."""
+    if os.name == "nt":
+        m = _memstatus()
+        return m.ullTotalPhys // 2**20, m.ullAvailPhys // 2**20
+    info = _meminfo()
     return info["MemTotal"] // 1024, info.get("MemAvailable", info["MemFree"]) // 1024
+
+
+def commit_mib() -> tuple[int, int] | None:
+    """(commit limit, commit available) MiB, or None. Windows: RAM plus page file, the limit pinned and private memory
+    count against (the design's probe floor is 4 GiB of commit headroom, after Strata). Linux: CommitLimit and
+    CommitLimit - Committed_AS, which only bind under strict overcommit."""
+    try:
+        if os.name == "nt":
+            m = _memstatus()
+            return m.ullTotalPageFile // 2**20, m.ullAvailPageFile // 2**20
+        info = _meminfo()
+        return info["CommitLimit"] // 1024, (info["CommitLimit"] - info["Committed_AS"]) // 1024
+    except (OSError, KeyError, AttributeError, ValueError):
+        return None
+
+
+def process_memory_mib(pid: int) -> dict:
+    """Peak working set and peak commit (private bytes) of a running process, in MiB; {} when unreadable.
+
+    Read just before the process is stopped: both are peaks over its lifetime. Linux gives VmHWM (peak resident) and
+    no per-process commit figure."""
+    try:
+        if os.name == "nt":
+            class PMC(ctypes.Structure):
+                _fields_ = [("cb", ctypes.c_ulong), ("PageFaultCount", ctypes.c_ulong),
+                            ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                            ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+            k32 = ctypes.windll.kernel32
+            k32.OpenProcess.restype = ctypes.c_void_p
+            k32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+            k32.K32GetProcessMemoryInfo.argtypes = [ctypes.c_void_p, ctypes.POINTER(PMC), ctypes.c_ulong]
+            k32.CloseHandle.argtypes = [ctypes.c_void_p]
+            h = k32.OpenProcess(0x1000, 0, pid)               # PROCESS_QUERY_LIMITED_INFORMATION: no admin needed
+            if not h:
+                return {}
+            try:
+                c = PMC()
+                c.cb = ctypes.sizeof(PMC)
+                if not k32.K32GetProcessMemoryInfo(h, ctypes.byref(c), c.cb):
+                    return {}
+                return {"working_set_peak_mib": c.PeakWorkingSetSize // 2**20, "commit_peak_mib": c.PeakPagefileUsage // 2**20}
+            finally:
+                k32.CloseHandle(h)
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                if line.startswith("VmHWM:"):
+                    return {"working_set_peak_mib": int(line.split()[1]) // 1024}
+    except (OSError, AttributeError, ValueError):
+        pass
+    return {}
 
 
 def detect() -> Machine:

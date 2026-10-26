@@ -198,6 +198,29 @@ class BudgetBelowFloor(ValueError):
                          f"use --moe-cache-mib {self.min_mib} or more")
 
 
+def floor_mib(geom: Geometry, n_ubatch: int = 512, alignment: int = CUDA_ALIGNMENT) -> int:
+    """The smallest --moe-cache-mib the fork starts with (patch 0001): every group's floor slots, rounded up."""
+    try:
+        cache_slots(geom, 0, n_ubatch, alignment)
+    except BudgetBelowFloor as e:
+        return e.min_mib
+    return 0
+
+
+def full_mib(geom: Geometry, n_ubatch: int = 512, alignment: int = CUDA_ALIGNMENT) -> int:
+    """The smallest --moe-cache-mib that gives every group a slot for every expert: a larger budget buys nothing.
+    The split is by host bytes while each bank also pads and keeps a spare slot, so the plain sum can leave one group a
+    slot short; the loop adds MiB until no group is (a few steps at most)."""
+    groups = geom.groups()
+    mib = max(math.ceil(sum(g.alloc_size(len(g.layers) * g.n_expert, alignment) for g in groups) / MiB),
+              floor_mib(geom, n_ubatch, alignment))
+    for _ in range(4096):
+        if all(s.n_slots >= len(s.group.layers) * s.group.n_expert for s in cache_slots(geom, mib, n_ubatch, alignment)):
+            return mib
+        mib += 1
+    return mib
+
+
 @dataclass
 class GroupSlots:
     group: Group
