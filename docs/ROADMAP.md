@@ -153,7 +153,7 @@ gate should use a model whose licence fits the deploying organisation.
 | 5 | Most arms ran one or two rounds | five rounds only for the decode exit; repeat any result that changes a default |
 | 6 | The build has no C++ exception unwinding (`/EHsc` off) | to fix with the rebase build |
 | 7 | One sequence at a time | by design: since 27/10 `serve`'s proxy enforces it (one running, one queued, 503 with a reason); multi-sequence is M2 |
-| 10 | E52 (prefix-reuse exactness) registered run not made | to run when the GPU is free; client and inputs are ready (outside this repository) |
-| 11 | Governor, `--confirm` and thread sweep tested offline only | a live competing-allocation test is the M1.3 exit |
 | 8 | Linux paths never run; one machine only | M1.4 |
 | 9 | Swift's publisher missing from the thanks | fixed 27/10 (UkisAI) |
+| 10 | E52 (prefix-reuse exactness) registered run not made | to run when the GPU is free; client and inputs are ready (outside this repository) |
+| 11 | Governor, `--confirm` and thread sweep tested offline only | a live competing-allocation test is the M1.3 exit |
