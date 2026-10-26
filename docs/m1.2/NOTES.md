@@ -342,6 +342,9 @@ python3 -I docs/m1.2/tools/make_xcheck_inputs.py tests/data && docs/m1.2/tools/t
 python3 -m unittest discover -s tests
 ```
 
+Since 27/10/2026 the patch files sit on top of `63b4b303` (rebase checked in register E48): to repeat these commands
+with the current files, check out `63b4b303` instead of `a37cc461`.
+
 ## 9. llama.cpp CPU test suite after 0004
 
 `ctest -L main -j8 --timeout 300` on the patched build (4 vCPUs): 51 of 54 passed, including the new `test-moe-trace-ids`.

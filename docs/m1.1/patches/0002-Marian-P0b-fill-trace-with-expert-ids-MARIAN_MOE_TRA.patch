@@ -1,4 +1,4 @@
-From 1a5fcba7a3070882e5ab62ff597a8c4e5a878a52 Mon Sep 17 00:00:00 2001
+From 978173eac2c32ae2d642e1918b13219979c38fa4 Mon Sep 17 00:00:00 2001
 From: tylnexttime <tylnexttime@users.noreply.github.com>
 Date: Sat, 24 Oct 2026 07:49:21 +1100
 Subject: [PATCH 2/3] Marian P0b: fill trace with expert ids
@@ -24,10 +24,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  2 files changed, 42 insertions(+), 1 deletion(-)
 
 diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
-index dcbe5070..35681276 100644
+index 4bce5a4f..0e783196 100644
 --- a/src/llama-moe-cache.cpp
 +++ b/src/llama-moe-cache.cpp
-@@ -32,6 +32,25 @@ FILE * llama_moe_trace_file() {
+@@ -33,6 +33,25 @@ FILE * llama_moe_trace_file() {
      return f;
  }
  
@@ -53,7 +53,7 @@ index dcbe5070..35681276 100644
  int64_t llama_moe_trace_us() {
      return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
  }
-@@ -670,7 +689,8 @@ struct llama_moe_cache::impl {
+@@ -653,7 +672,8 @@ struct llama_moe_cache::impl {
          GGML_ASSERT(ggml_is_contiguous(sel));
  
          FILE * trace = llama_moe_trace_file();
@@ -63,7 +63,7 @@ index dcbe5070..35681276 100644
  
          ids.resize(ggml_nelements(sel));
          ggml_backend_tensor_get_async(backend, sel, ids.data(), 0, ggml_nbytes(sel));
-@@ -712,6 +732,23 @@ struct llama_moe_cache::impl {
+@@ -695,6 +715,23 @@ struct llama_moe_cache::impl {
          st.misses += fills.size();
          st.bytes  += bytes;
  
@@ -88,7 +88,7 @@ index dcbe5070..35681276 100644
          ggml_backend_tensor_set_async(backend, dst, src->data, 0, ggml_nbytes(src));
  
 diff --git a/src/llama-moe-cache.h b/src/llama-moe-cache.h
-index 5edb51be..f559d2e6 100644
+index df34e2e8..45bfd759 100644
 --- a/src/llama-moe-cache.h
 +++ b/src/llama-moe-cache.h
 @@ -51,3 +51,7 @@ using llama_moe_cache_ptr = std::unique_ptr<llama_moe_cache>;
