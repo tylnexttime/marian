@@ -1,4 +1,4 @@
-From 8512ed07263084d74f938c49f431cb8bfa335092 Mon Sep 17 00:00:00 2001
+From dfcb933683cdbaf03cb5f613bc670b60b0a23e54 Mon Sep 17 00:00:00 2001
 From: tylnexttime <tylnexttime@users.noreply.github.com>
 Date: Thu, 22 Oct 2026 15:16:28 +1100
 Subject: [PATCH] Marian P0: MoE cache and selective-copy trace
@@ -11,7 +11,7 @@ Subject: [PATCH] Marian P0: MoE cache and selective-copy trace
  3 files changed, 77 insertions(+)
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index ca84fc40..c2dbbd75 100644
+index 455f5198..b569c895 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -14,7 +14,9 @@
@@ -24,7 +24,7 @@ index ca84fc40..c2dbbd75 100644
  #include <cmath>
  #include <cstring>
  #include <limits>
-@@ -2802,10 +2804,17 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+@@ -2805,10 +2807,17 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
      const int64_t n_expert    = src->ne[2];
      const size_t  expert_size = src->nb[2];
  
@@ -42,7 +42,7 @@ index ca84fc40..c2dbbd75 100644
  
          st.used.assign(n_expert, false);
          for (int64_t i1 = 0; i1 < ids->ne[1]; i1++) {
-@@ -2840,7 +2849,9 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+@@ -2843,7 +2852,9 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
              }
              if (next < e) {
                  ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + next*expert_size, next*expert_size, (e - next)*expert_size);
@@ -52,7 +52,7 @@ index ca84fc40..c2dbbd75 100644
              e   += n;
              next = e;
          }
-@@ -2851,11 +2862,22 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+@@ -2854,11 +2865,22 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
          const size_t size    = (last + 1 - next)*expert_size + padding;
          if (size > 0) {
              ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + offset, offset, size);
@@ -76,10 +76,10 @@ index ca84fc40..c2dbbd75 100644
  }
  
 diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
-index 4d3596b2..415618a8 100644
+index 6a343a76..d61a9c29 100644
 --- a/src/llama-moe-cache.cpp
 +++ b/src/llama-moe-cache.cpp
-@@ -6,10 +6,35 @@
+@@ -7,10 +7,35 @@
  #include "ggml-cpp.h"
  
  #include <algorithm>
@@ -115,7 +115,7 @@ index 4d3596b2..415618a8 100644
  namespace {
  
  // SLRU of the experts of a group of layers, the slot of each expert is kept in the slot map of its layer
-@@ -579,10 +604,22 @@ struct llama_moe_cache::impl {
+@@ -562,10 +587,22 @@ struct llama_moe_cache::impl {
          }
          GGML_ASSERT(ggml_is_contiguous(sel));
  
@@ -138,7 +138,7 @@ index 4d3596b2..415618a8 100644
          size_t n_hit = 0;
          if (!g.slru.plan(il, ids.data(), ids.size(), fills, n_hit)) {
              GGML_ABORT("the MoE cache is too small for the experts selected in layer %d", il);
-@@ -613,6 +650,16 @@ struct llama_moe_cache::impl {
+@@ -596,6 +633,16 @@ struct llama_moe_cache::impl {
          // the next copy synchronizes the backend before it changes the slot map again
          ggml_backend_tensor_set_async(backend, dst, src->data, 0, ggml_nbytes(src));
  
@@ -156,7 +156,7 @@ index 4d3596b2..415618a8 100644
      }
  
 diff --git a/src/llama-moe-cache.h b/src/llama-moe-cache.h
-index 9baf0639..1b59c0f2 100644
+index 6c8e3658..b45ae09f 100644
 --- a/src/llama-moe-cache.h
 +++ b/src/llama-moe-cache.h
 @@ -2,6 +2,9 @@

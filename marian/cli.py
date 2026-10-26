@@ -12,6 +12,9 @@
     python -m marian replay TAG.ids.bin --geometry MODEL.geometry.json --budget-mib 9400 [--requests TAG.requests.jsonl]
                             [--trace TAG.trace.csv] [--fills TAG.fills.csv] [--md OUT.md] [--json OUT.json]
     python -m marian synth OUTDIR [--seed 1]          (a SYNTHETIC trace for trying replay without a GPU)
+    python -m marian predict TAG.ids.bin --geometry MODEL.geometry.json --budget-mib 9400 --requests TAG.requests.jsonl
+                             [--trace TAG.trace.csv] [--check-against OTHER.ids.bin] [--train decode:0,...] [--test ...]
+                             [--permutations 100] [--seed 47] [--md OUT.md] [--json OUT.json]      (register E47)
 
 `--fit-now` re-checks each measured row against the VRAM free at this moment (see plan.py); `--vram-free` gives that
 figure instead of measuring it. `plan --json` prints one JSON object on stdout for other programs: {"ok": true, "row",
@@ -31,7 +34,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
-from . import geometry, gguf, idstrace, machine, plan, profile, replay, synth
+from . import geometry, gguf, idstrace, machine, plan, predict, profile, replay, synth
 from . import launch
 from .engines import LlamaCpp
 from .profile import CacheOptions, sha256_head
@@ -109,6 +112,24 @@ def main(argv=None) -> int:
     p.add_argument("out", type=Path)
     for k, v in synth.SynthSpec().__dict__.items():
         p.add_argument("--" + k.replace("_", "-"), type=type(v), default=v)
+    p = sub.add_parser("predict", help="how predictable is a trace's expert routing, and what is perfect prediction worth (E47)")
+    p.add_argument("ids", type=Path, help="MARIAN_MOE_TRACE_IDS file (patch 0004)")
+    p.add_argument("--geometry", type=Path, required=True, help="JSON from `marian geometry`")
+    p.add_argument("--budget-mib", type=float, required=True, help="--moe-cache-mib of the run (the slots of measure 3)")
+    p.add_argument("--requests", type=Path, required=True, help="run_arm's <tag>.requests.jsonl (phases and prompts)")
+    p.add_argument("--trace", type=Path, help="the same run's MARIAN_MOE_TRACE CSV: the timings of the oracle (measure 5)")
+    p.add_argument("--train", default=",".join(predict.DEFAULT_TRAIN), help="training prompts (decode:N or N)")
+    p.add_argument("--test", default=",".join(predict.DEFAULT_TEST), help="test prompts (decode:N or N)")
+    p.add_argument("--labels", default=",".join(predict.DEFAULT_LABELS), help="names of decode prompts 0, 1, ...")
+    p.add_argument("--check-against", type=Path, help="another run's ids trace of the same prompts: its decode ids must equal these")
+    p.add_argument("--check-requests", type=Path, help="that run's requests.jsonl (default: <tag>.requests.jsonl beside it)")
+    p.add_argument("--permutations", type=int, default=100); p.add_argument("--seed", type=int, default=47)
+    p.add_argument("--bandwidths", default=",".join(f"{k}={v:g}" for k, v in predict.BANDWIDTHS.items()),
+                   help="copy sources for the oracle, GB/s (1e9 bytes/s) as the copy probe prints them")
+    p.add_argument("--pinned", default="pinned", help="the source a request-horizon prediction stages into")
+    p.add_argument("--reference-tok-s", type=float, default=predict.REFERENCE_TOK_S, help="measured decode the oracle rule compares with")
+    p.add_argument("--ubatch", type=int, default=512); p.add_argument("--alignment", type=int, default=geometry.CUDA_ALIGNMENT)
+    p.add_argument("--md", type=Path); p.add_argument("--json", type=Path)
     a = ap.parse_args(argv)
 
     if a.cmd == "machine":
@@ -123,6 +144,8 @@ def main(argv=None) -> int:
                           "groups": [{"type": g.type, "layers": len(g.layers), "expert_bytes": g.expert_bytes} for g in groups]}, indent=1))
     elif a.cmd == "replay":
         return _replay(a)
+    elif a.cmd == "predict":
+        return _predict(a)
     elif a.cmd == "synth":
         spec = synth.SynthSpec(**{k: getattr(a, k) for k in synth.SynthSpec().__dict__})
         print(json.dumps(synth.write(a.out, spec)))
@@ -281,6 +304,56 @@ def _replay(a) -> int:
         a.md.write_text(text, encoding="utf-8")
     if a.json:
         a.json.write_text(json.dumps(reps if len(reps) > 1 else reps[0], indent=1, default=str) + "\n", encoding="utf-8")
+    return 0
+
+
+def _predict(a) -> int:
+    geom = geometry.load(a.geometry)
+    trace = idstrace.read_ids(a.ids, expected_k=geom.n_expert_used)
+    idstrace.assign_requests(trace, idstrace.read_requests(a.requests))
+    csv_rows = idstrace.read_csv(a.trace) if a.trace else None
+    if csv_rows is not None:
+        ok, joined, bad = idstrace.check_heads(trace, csv_rows)
+        print(f"record heads: {ok} of {joined} S records agree with their S line on n_tokens x k", file=sys.stderr)
+        if ok != joined:
+            for b in bad:
+                print(f"  {b}", file=sys.stderr)
+            print("refusing to read a trace whose record heads disagree with the server's own trace", file=sys.stderr)
+            return 2
+    other = None
+    if a.check_against:
+        other = idstrace.read_ids(a.check_against, expected_k=geom.n_expert_used)
+        req = a.check_requests
+        if req is None and a.check_against.name.endswith(".ids.bin"):
+            req = a.check_against.with_name(a.check_against.name[:-len(".ids.bin")] + ".requests.jsonl")
+        if req is not None and req.exists():
+            idstrace.assign_requests(other, idstrace.read_requests(req))
+        else:
+            print("--check-against: no request log beside it; its requests are inferred and will not match by phase",
+                  file=sys.stderr)
+            idstrace.infer_requests(other)
+    split = lambda x: [y.strip() for y in x.split(",") if y.strip()]                     # noqa: E731
+    bw = {k.strip(): float(v) for k, v in (x.split("=", 1) for x in split(a.bandwidths))}
+    if a.pinned not in bw:
+        print(f"--pinned {a.pinned!r} is not one of the --bandwidths ({', '.join(bw)})", file=sys.stderr)
+        return 2
+    try:
+        rep = predict.run_all(trace, geom, a.budget_mib, train=split(a.train), test=split(a.test),
+                              labels=tuple(split(a.labels)), csv_rows=csv_rows, other=other,
+                              other_name=a.check_against.name if a.check_against else "", permutations=a.permutations,
+                              seed=a.seed, bandwidths=bw, pinned=a.pinned, reference_tok_s=a.reference_tok_s,
+                              n_ubatch=a.ubatch, alignment=a.alignment,
+                              names=predict.file_names(ids=a.ids, requests=a.requests, trace=a.trace, geometry=a.geometry),
+                              progress=lambda m: print(f"  {m}", file=sys.stderr))
+    except geometry.BudgetBelowFloor as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    text = predict.to_markdown(rep)
+    print(text)
+    if a.md:
+        a.md.write_text(text, encoding="utf-8")
+    if a.json:
+        a.json.write_text(json.dumps(rep, indent=1, default=str) + "\n", encoding="utf-8")
     return 0
 
 

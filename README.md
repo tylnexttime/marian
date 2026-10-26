@@ -13,7 +13,7 @@ Marian has two layers.
 1. **M0, a measuring tool** (Python, standard library only). It measures how a model behaves on *this* machine:
    speed and memory for each context size, KV-cache type and GPU/CPU split. Then it picks the fastest configuration
    that fits a request and launches it. It never extrapolates: if nothing measured fits, it says so.
-2. **M1, a thin fork of llama.cpp** (pinned at upstream commit [`a37cc461`](https://github.com/ggml-org/llama.cpp/commit/a37cc461)). Mixture-of-experts (MoE) models only use a
+2. **M1, a thin fork of llama.cpp** (pinned at upstream commit [`63b4b303`](https://github.com/ggml-org/llama.cpp/commit/63b4b303)). Mixture-of-experts (MoE) models only use a
    few of their "experts" for each token. M1 keeps the most-used experts in GPU memory (VRAM) **one expert at a time,
    not one whole layer at a time**, and fetches the rest from system RAM or the SSD as fast as the machine allows. It
    builds on upstream llama.cpp's own expert cache (`--moe-cache-mib`). It is **exact by default**: speed-ups that can
@@ -76,7 +76,7 @@ These are why a measuring tool matters. Sources and conditions for every figure 
  |    exactness floor  every expert group keeps enough slots for the largest step     |
  |    P3 miss source   unbuffered reads -> pinned staging ring -> pinned RAM tier     |
  +------------------------------------------------------------------------------------+
- |  upstream llama.cpp at a37cc461: --moe-cache-mib per-expert VRAM cache (SLRU),     |
+ |  upstream llama.cpp at 63b4b303: --moe-cache-mib per-expert VRAM cache (SLRU),     |
  |  MUL_MAT_ID on the cache bank, selective expert copy for large batches             |
  +------------------------------------------------------------------------------------+
 ```
@@ -93,7 +93,7 @@ These are why a measuring tool matters. Sources and conditions for every figure 
 | Memory governor with supervised restart, live confirmation, learned counts (rest of M1.3); ranked core, warm start, TinyLFU doorkeeper in VRAM (P2), drain removal, prefetch | Marian | designed, not built |
 
 The patches are in [docs/m1.0/patches](docs/m1.0/patches) (P0) and [docs/m1.1/patches](docs/m1.1/patches) (0001
-exactness floor, 0002 fill trace, 0003 P3 minimal), as `git format-patch` files on top of `a37cc461`.
+exactness floor, 0002 fill trace, 0003 P3 minimal), as `git format-patch` files on top of `63b4b303`.
 
 ## Inspirations and prior art
 
@@ -141,10 +141,12 @@ against the primary sources (arXiv abstract pages and API, Crossref for DOIs, th
   support (#30112) and the selective-copy refactor (#29943), and Evan Huus ([@eapache](https://github.com/eapache))
   opened the SLRU policy (#30637).
 - **Strata** (Niko1221 and contributors) and **Project Maya** (Peasant Smith / mw00 and needmorevram), both MIT.
-- The publishers of the public weights we measured: **Qwen** (Qwen3.5-9B; Qwen3.8-Flash-Next, the base of the
-  Swift 1.5 IQ2_XS quantisation, whose publisher we still need to confirm), **Google** (Gemma 4 26B-A4B-it, Gemma 4
-  E4B-it QAT), **NVIDIA** (NVIDIA-Nemotron-3.5-Bolt-E4B-4GB), **unsloth** (GGUF quantisations of Gemma 4 26B-A4B-it
-  and Qwen3.5-9B) and **GrootTeam** (Groot-19B-A3B-261023).
+- The publishers of the public weights we measured: **Qwen** (Qwen3.5-9B; Qwen3.8-Flash-Next), **UkisAI** (the
+  Swift 1.5 IQ2_XS quantisation of Qwen3.8-Flash-Next,
+  [ukisai/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-GGUF](https://huggingface.co/ukisai/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-GGUF),
+  Swift Open License v1.0 with the Qwen parts under the Qwen Community License 1.0, made with **IST-DASLab**'s GSQ and
+  RCO methods), **Google** (Gemma 4 26B-A4B-it, Gemma 4 E4B-it QAT), **NVIDIA** (NVIDIA-Nemotron-3.5-Bolt-E4B-4GB),
+  **unsloth** (GGUF quantisations of Gemma 4 26B-A4B-it and Qwen3.5-9B) and **GrootTeam** (Groot-19B-A3B-261023).
 - **Astra and Fable**, AI models consulted for design ideas (tagged [AS] and [FB] in the design); **Sol**, the AI model
   that wrote the research pack; and **Sol, Luna and Astra**, who critiqued the first design (24 items, all folded in).
 - **Chris (Krystof Tyl)**, the human partner, and **Alder**, who wrote M0 and asked the question that the gate
@@ -189,15 +191,20 @@ Be warned; this is research code.
   prompt set.
 - **One sequence at a time.** Concurrent requests change the kernels and memory peaks; multi-sequence serving is not
   supported.
-- **Upstream moves fast.** The cache is experimental upstream and changed three times in two weeks; the fork is not
-  rebased (43 upstream commits since the pin, one of which changes the Swift model's attention graph).
+- **Upstream moves fast.** The cache is experimental upstream and changed three times in two weeks. On 27/10/2026 the
+  fork was rebased from `a37cc461` to `63b4b303` (107 upstream commits, mechanical fixes only) and re-checked (E48):
+  the Gemma cache arms are still log-probability-identical to all-VRAM, and the Swift tier still meets the decode exit
+  in one round (15.1 tok/s warm, 12.6 after a 16K prompt, against 14.4-14.6 and 13.4-13.7 at the old pin). Three of
+  those commits change the Swift model's numerics, so Swift's texts differ from the runs at `a37cc461`; measurements
+  dated before 27/10/2026 were taken at the old pin.
 - **Calibration v1 measures, then trusts its measurement.** The planner now restores cache budgets, miss sources and
   tier sizes into the launch configuration, and `serve` checks the chosen row against the VRAM and RAM free at
   launch. But nothing watches memory after launch yet (no governor, no supervised restart), no live confirmation run
   checks the winner against the runner-up, and the cliff finder assumes decode speed rises with the cache budget
   until the cliff. The cache arms have run once on one machine (the reference laptop), with one model, and with
   the cache capped at 2,500 MiB so that the miss sources had misses to serve: the bisection itself has only run
-  against synthetic speed and VRAM curves in the tests, not against a real paging cliff.
+  against synthetic speed and VRAM curves in the tests, not against a real paging cliff. That smoke ran the M1.2
+  build, at the old pin (`a37cc461`), not the rebased fork.
 - The build carries no C++ exception unwinding (`/EHsc` is off, inherited from the measured builds).
 
 ## Status
@@ -208,7 +215,7 @@ Be warned; this is research code.
 | M1.0 | measured, 22-24/10/2026 | upstream cache vs stock on Swift 1.5 IQ2_XS; copy probe; 8 GB floor arms; gate and control models |
 | M1.1 | in progress | exactness floor PASS; trace-replay probe GO; P3 verify run PASS (11/11); P3 server arms measured 24/10/2026 (two rounds): the tier doubles decode, exact, but costs prefill about 3x; controls and the Maya drive test done; replay = server exactly (+0.00 points, the M1.1 exit check); five-round confirmation: decode exit met (E44); log-probability exactness against all-VRAM (E45) |
 | M1.2 | tooling done, policy deprioritised | the routing-id trace and the exact replay (A19); the ranked policy lost to upstream's SLRU on the real trace ([JOURNEY section 7](docs/JOURNEY.md#7-what-is-next)) |
-| M1.3 | Python side built, 27/10/2026 | `marian calibrate`, cache arms (cliff finder, miss sources, RAM envelope), calibration gate, launch checks, `serve --stock`, `--exact-only`, `marian diag`; 74 offline tests pass. One GPU smoke on the reference laptop (27/10/2026: Gemma 4 26B-A4B IQ3_XXS, context 4096, 218 s): the gate refused before calibration, the walk, two cache budgets, the ring and two tier sizes ran, `plan`, `serve --dry-run` and `serve --stock --dry-run` passed. Not built: governor with supervised restart, live confirmation, learned counts |
+| M1.3 | Python side built, 27/10/2026 | `marian calibrate`, cache arms (cliff finder, miss sources, RAM envelope), calibration gate, launch checks, `serve --stock`, `--exact-only`, `marian diag`; 26 new offline tests, and the whole offline suite passes. One GPU smoke on the reference laptop (27/10/2026, the M1.2 build at the old pin: Gemma 4 26B-A4B IQ3_XXS, context 4096, 218 s): the gate refused before calibration, the walk, two cache budgets, the ring and two tier sizes ran, `plan`, `serve --dry-run` and `serve --stock --dry-run` passed. Not built: governor with supervised restart, live confirmation, learned counts |
 | M1.4 onwards | not started | real-hardware validation (see [DESIGN-M1 section 10](docs/design/DESIGN-M1.md)) |
 
 **M1 exit criteria, and where each stands** (reference laptop, Swift 1.5 IQ2_XS):
@@ -311,7 +318,12 @@ before and at its lowest, commit headroom, the server's peak working set and com
 
 ## Roadmap
 
-From [DESIGN-M1 section 10](docs/design/DESIGN-M1.md), reshaped by what M1.0 measured:
+The living roadmap, with the evidence behind each item and the dev debt, is
+[docs/ROADMAP.md](docs/ROADMAP.md) (updated 27/10/2026 from scans of upstream llama.cpp and the wider ecosystem). In
+short: rebase onto current upstream; make prefill the main target (Swift's 26.8 GiB per-layer embedding table shares
+the page cache with the experts, and prefill misses still fault through the memory map); calibration v1 with Windows
+pinning and RAM-safety rules; then the 8 GB laptop under RAM pressure. The milestones from
+[DESIGN-M1 section 10](docs/design/DESIGN-M1.md), reshaped by what M1.0 measured:
 
 - **M1.2:** a ranked policy (ranked core, warm start, doorkeeper, transient slots, budgets by need), with a bitwise
   invariance test.

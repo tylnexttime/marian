@@ -1,4 +1,4 @@
-From 2c1cf30a533bcfc376956d52e923355a595678ab Mon Sep 17 00:00:00 2001
+From 454f3ba122f29ee6977f18932841fde7ee1182ba Mon Sep 17 00:00:00 2001
 From: tylnexttime <tylnexttime@users.noreply.github.com>
 Date: Sat, 24 Oct 2026 15:17:20 +1100
 Subject: [PATCH] Marian P1 review fixes: S record k/n_tokens from the
@@ -13,10 +13,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  3 files changed, 19 insertions(+), 6 deletions(-)
 
 diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
-index bc3a9f3d..65d3e099 100644
+index df8d063f..5034355a 100644
 --- a/src/llama-moe-cache.cpp
 +++ b/src/llama-moe-cache.cpp
-@@ -786,7 +786,9 @@ struct llama_moe_cache::impl {
+@@ -769,7 +769,9 @@ struct llama_moe_cache::impl {
          const int64_t t1 = trace ? llama_moe_trace_us() : 0;
          if (trace_ids) {
              // every routed id of the step, hits included, from the ids already read (Marian P1)
