@@ -69,14 +69,22 @@ count, since stock offload itself changes answers.
 
 On the real trace every candidate policy lost to upstream's SLRU (JOURNEY A19), so M1.2's work is now:
 
-- **E47, predictability bounds** (pre-registered 27/10): token persistence, layer-to-layer itinerary, prompt-to-decode
-  working set, and what perfect prediction is worth by source and horizon. This gates any prefetch predictor.
+- **E47, predictability bounds: done 27/10** (`marian predict`, [docs/m1.2/E47.md](m1.2/E47.md)).
+  - **Token persistence is real:** 37.7% of a token's experts were used by the previous token at that layer, against
+    20.1% by chance.
+  - **Predicting the next layer's experts from this layer's ids is dead:** 19.2%, below plain persistence.
+  - **A prompt's prefill does not predict its decode experts** better than global frequency.
+  - **Routing is near-uniform across prompts.** The global frequency prior is 3.1% against 2.0% chance, so ranking
+    experts by frequency has little to work with.
+  - **Perfect one-layer-ahead prediction from pinned RAM would be worth +41%** (20.5 against 14.5 tok/s): real
+    headroom, but in the miss path. **So M2's overlap work comes before any predictor,** and a predictor must first be
+    scored on misses, not on all activations.
 - **Replay methodology**: per-access replay inflated recency policies by 27-29% and inverted rankings, and
   single-template prompt sets moved results by 19-32 points (arXiv 2608.07911). Check our replay against both.
 - **Exactness to the end**: golden bit-compare kernel tests at real shapes (Strata's pattern) as the single-layer
   harness E0, the kernel-boundary parity matrix, and a full-logit comparison (today: top-3 log-probabilities only).
-- **Residency bonus for predicted experts** (Edge0's `pin_bonus` idea): exact, cheap, only if E47 says routing is
-  predictable.
+- **Residency bonus for predicted experts** (Edge0's `pin_bonus` idea): exact and cheap, but deferred. E47 found
+  routing near-uniform across prompts and layer-ahead id prediction dead.
 
 ### 6. Later milestones
 
