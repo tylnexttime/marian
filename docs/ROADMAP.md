@@ -25,7 +25,7 @@ gate). Evidence marked *theirs* comes from another project's own machine and has
 
 ## Next, in order
 
-### 1. Rebase onto current upstream (in progress)
+### 1. Rebase onto current upstream (done 27/10/2026)
 
 We are 107 upstream commits behind the pin `a37cc461`. The stack re-applies with mechanical fixes (the cache
 constructor gained `no_alloc`), but three upstream changes alter Swift's numerics (qwen4exp attention selection, a
@@ -127,7 +127,7 @@ gate should use a model whose licence fits the deploying organisation.
 
 | # | Debt | State |
 |---|---|---|
-| 1 | 107 commits behind upstream | rebase + E48 in progress |
+| 1 | 107 commits behind upstream | **done 27/10**: rebased onto `63b4b303`, E48 passed (exact, decode exit met) |
 | 2 | M0 drops the cache budget when it launches a plan | fixed on the M1.3 branch (in progress) |
 | 3 | Prefill 4-5x behind stock with the tier | prefill track above |
 | 4 | Exactness proved at top-3 log-probability, not full logits; no E0 harness or parity matrix | M1.2 above |
