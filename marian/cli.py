@@ -6,7 +6,7 @@
     python -m marian calibrate MODEL.gguf --engine PATH/llama-server [--ctx 4096] [--kv f16]   (the quick profile)
     python -m marian plan MODEL.gguf --need 6000 [--objective pp] [--fit-now | --vram-free MIB] [--exact-only | --stock] [--json]
     python -m marian serve MODEL.gguf --engine PATH/llama-server --need 6000 [--port 9951] [--calibrate] [--exact-only |
-                           --stock] [--dry-run] [--json]
+                           --stock] [--confirm] [--cache-prompt on --gate-prefix FILE] [--dry-run] [--json]
     python -m marian diag OUT.zip [MODEL.gguf] [--engine PATH/llama-server] [--need 6000]
     python -m marian geometry SHARD.gguf [SHARD.gguf ...] -o MODEL.geometry.json
     python -m marian replay TAG.ids.bin --geometry MODEL.geometry.json --budget-mib 9400 [--requests TAG.requests.jsonl]
@@ -23,6 +23,9 @@ figure instead of measuring it. `plan --json` prints one JSON object on stdout f
 `serve` (M1.3) refuses without a profile for this machine, model and engine unless `--calibrate` runs the quick one
 first, always checks the chosen row against the VRAM and RAM free now, and runs the launch checks of launch.py; a
 failure is a reason and exit 2 (`--json`: one object). `--stock` is the rollback: plain upstream placement only.
+Then it serves through a front proxy on --port (llama-server on --internal-port, default --port + 1): one sequence at a
+time, a memory governor with supervised restart, the passive live check, and prefix reuse off until E52 passes
+(serve.py); `--confirm` first A/B-tests the plan against the runner-up (confirm.py).
 """
 from __future__ import annotations
 
@@ -35,9 +38,9 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import geometry, gguf, idstrace, machine, plan, predict, profile, replay, synth
-from . import launch
+from . import confirm, launch, serve
 from .engines import LlamaCpp
-from .profile import CacheOptions, sha256_head
+from .profile import CacheOptions, ThreadOptions, sha256_head
 
 
 def profiles_dir() -> Path:
@@ -87,6 +90,25 @@ def main(argv=None) -> int:
             p.add_argument("--engine", required=True)
             p.add_argument("--calibrate", action="store_true", help="no profile yet: run the quick calibration, then serve")
             p.add_argument("--dry-run", action="store_true", help="gate, plan and launch checks only; start nothing")
+            p.add_argument("--internal-port", type=int, help="llama-server's own port (default: --port + 1)")
+            p.add_argument("--allow-non-exact", action="store_true",
+                           help="let --confirm and the governor move an exact-class plan to a non-exact row")
+            p.add_argument("--confirm", action="store_true", help="A/B the plan against the runner-up before serving")
+            p.add_argument("--confirm-rounds", type=int, default=4, metavar="K", help="interleaved A/B rounds")
+            p.add_argument("--slow", type=float, default=0.15, metavar="X",
+                           help="report a live decode rate more than this fraction below the profile")
+            p.add_argument("--live-n", type=int, default=8, metavar="N", help="answers the live check reads (0: off)")
+            p.add_argument("--cache-prompt", choices=["off", "on"], default="on" if serve.CACHE_PROMPT_DEFAULT else "off",
+                           help="llama-server's prompt-prefix reuse (off until register test E52 passes)")
+            p.add_argument("--gate-prefix", type=Path, metavar="FILE",
+                           help="prime the slot with this fixed prompt prefix after every start (needs --cache-prompt on)")
+            p.add_argument("--queue", type=int, default=1, help="requests that may wait behind the running one")
+            p.add_argument("--queue-timeout", type=float, default=300, metavar="S")
+            p.add_argument("--interval", type=float, default=2.0, metavar="S", help="governor reading interval")
+            p.add_argument("--persist", type=float, default=10.0, metavar="S",
+                           help="memory pressure lasting this long restarts the server on a smaller plan")
+            p.add_argument("--drain", type=float, default=30.0, metavar="S", help="wait this long for the running request")
+            p.add_argument("--max-restarts", type=int, default=3)
     p = sub.add_parser("diag", help="a diagnostics bundle (zip): machine, profiles, plan, log tails; no prompts or paths")
     p.add_argument("out", type=Path); p.add_argument("model", type=Path, nargs="?")
     p.add_argument("--engine"); p.add_argument("--need", type=int, default=4096); p.add_argument("--port", type=int, default=9951)
@@ -154,11 +176,12 @@ def main(argv=None) -> int:
     elif a.cmd == "profile":
         eng = LlamaCpp(a.engine, a.port)
         out = profile.run(a.model, eng, [int(x) for x in a.ctx.split(",")], a.kv.split(","), a.step, a.threads,
-                          PROFILES, a.n_predict, cache=_cache_opts(a))
+                          PROFILES, a.n_predict, cache=_cache_opts(a), sweep=ThreadOptions(enabled=not a.no_thread_sweep))
         print(f"profile written: {out}")
     elif a.cmd == "calibrate":
         eng = LlamaCpp(a.engine, a.port)
-        out = profile.run(a.model, eng, [a.ctx], [a.kv], a.step, a.threads, PROFILES, a.n_predict, cache=_cache_opts(a))
+        out = profile.run(a.model, eng, [a.ctx], [a.kv], a.step, a.threads, PROFILES, a.n_predict, cache=_cache_opts(a),
+                          sweep=ThreadOptions(enabled=not a.no_thread_sweep))
         print(f"calibration written: {out}")
     elif a.cmd == "diag":
         eng = LlamaCpp(a.engine, a.port) if a.engine else None
@@ -174,6 +197,7 @@ def _cache_args(p, tier_steps: int) -> None:
     p.add_argument("--max-cache-mib", type=int, help="never offer the expert cache more VRAM than this")
     p.add_argument("--ram-floor", type=int, default=6144, metavar="MIB", help="never pin more than (RAM available - this)")
     p.add_argument("--tier-steps", type=int, default=tier_steps, help="pinned RAM tier sizes to measure")
+    p.add_argument("--no-thread-sweep", action="store_true", help="no CPU thread ladder for rows that compute on the CPU")
 
 
 def _cache_opts(a) -> CacheOptions:
@@ -182,11 +206,15 @@ def _cache_opts(a) -> CacheOptions:
 
 
 def _plan_or_serve(a) -> int:
-    serve = a.cmd == "serve"
+    serve_cmd = a.cmd == "serve"
     mid = sha256_head(a.model)
     docs = plan.load_docs(PROFILES, a.model, mid)
-    eng = LlamaCpp(a.engine, a.port) if serve else None
-    if serve and not plan.rows_of(docs, eng.name):                       # the calibration gate
+    internal = (a.internal_port or a.port + 1) if serve_cmd else a.port
+    eng = LlamaCpp(a.engine, internal) if serve_cmd else None
+    if serve_cmd and a.gate_prefix is not None and a.cache_prompt != "on":
+        return _plan_fail(a, "--gate-prefix primes llama-server's prompt reuse, which is off: prefix reuse stays opt-in "
+                             "until register test E52 shows it exact; add --cache-prompt on to opt in", [], None)
+    if serve_cmd and not plan.rows_of(docs, eng.name):                   # the calibration gate
         if not a.calibrate:
             return _plan_fail(a, launch.gate_reason(a.model, eng.name), [], None, gate="no_calibration")
         ctx = launch.quick_ctx(a.need)
@@ -197,7 +225,7 @@ def _plan_or_serve(a) -> int:
         docs = plan.load_docs(PROFILES, a.model, mid)
     rows = plan.rows_of(docs, eng.name if eng else None)
     free, ram_free = a.vram_free, None
-    if a.fit_now or serve:                       # serve always checks the row against the memory free now
+    if a.fit_now or serve_cmd:                   # serve always checks the row against the memory free now
         if free is None:
             now = machine.gpu_memory_free_mib()
             free = now[0] if now else None
@@ -211,45 +239,111 @@ def _plan_or_serve(a) -> int:
         why = launch.explain(rows, a.need, a.objective, a.model.name, free=free, margin=a.margin, ram_free=ram_free,
                              ram_floor=a.ram_floor, **filters)
         return _plan_fail(a, why, rows, free)
-    clean = {k: v for k, v in row.items() if not k.startswith("_")}
-    cfg = plan.to_config(row)
     warnings: list[str] = []
-    if serve:
+    if serve_cmd:
+        if a.cache_prompt == "off" and "--no-cache-prompt" in eng.capabilities().get("flags", []):
+            eng.server_extra = ["--no-cache-prompt"]
         doc = next(d for p, d in docs if p.name == row["_file"])
         reasons, warnings = launch.check(row, doc, a.model, mid, eng, stock=a.stock, vram_free_mib=free,
                                          margin_mib=a.margin, ram_free_mib=ram_free, ram_floor_mib=a.ram_floor)
         if reasons:
             return _plan_fail(a, "launch checks failed: " + "; ".join(reasons), rows, free,
-                              reasons=reasons, warnings=warnings, row=clean)
+                              reasons=reasons, warnings=warnings, row=_clean(row))
+    cfg = plan.to_config(row)
     if a.json:
         print(json.dumps({"ok": True, "model": a.model.name, "need": a.need, "objective": a.objective,
                           "vram_free_mib": free, "margin_mib": a.margin if free is not None else None,
                           "ram_available_mib": ram_free, "vram_basis": plan.vram_share(row)[1],
                           "exact_class": plan.exact_class(row), "stock": plan.is_stock(row), "warnings": warnings,
-                          "row": clean, "config": asdict(cfg),
-                          "server_args": LlamaCpp("llama-server", a.port).command(a.model, cfg)[1:],
+                          "row": _clean(row), "config": asdict(cfg),
+                          "server_args": _server_args(a, eng, cfg),
+                          "port": a.port, "internal_port": internal if serve_cmd else None,
+                          "cache_prompt": (a.cache_prompt == "on") if serve_cmd else None,
                           "profile_file": row.get("_file")}))
     else:
-        print(json.dumps(clean))
+        print(json.dumps(_clean(row)))
         for w in warnings:
             print(f"warning: {w}", file=sys.stderr)
         if not plan.exact_class(row):
             print("note: this configuration computes some experts on the CPU, so its answers can differ from "
                   "all-on-GPU (--exact-only excludes it)", file=sys.stderr)
-    if not serve or a.dry_run:
+    if not serve_cmd or a.dry_run:
         return 0
-    ok, why = eng.start(a.model, cfg, PROFILES / "serve.log")
-    print(why, file=sys.stderr if a.json else sys.stdout)
-    if not ok:
-        return 2
-    print(f"serving {a.model.name} on {eng.base} (Ctrl+C stops)", file=sys.stderr if a.json else sys.stdout)
+    return _serve(a, eng, rows, docs, row, mid, free, ram_free, filters)
+
+
+def _clean(row: dict) -> dict:
+    return {k: v for k, v in row.items() if not k.startswith("_")}
+
+
+def _server_args(a, eng, cfg) -> list[str]:
+    """llama-server's arguments without the executable, as a program would launch them (the user-facing port for
+    `plan`, the internal port for `serve`, which puts its proxy on --port)."""
+    e = LlamaCpp("llama-server", eng.port if eng is not None else a.port)
+    if eng is not None:
+        e.server_extra = list(eng.server_extra)
+    return e.command(a.model, cfg)[1:]
+
+
+def _serve(a, eng, rows, docs, row, mid, free, ram_free, filters) -> int:
+    say = lambda m: print(m, file=sys.stderr if a.json else sys.stdout, flush=True)       # noqa: E731
+    log = PROFILES / "serve.log"
+    allow = a.allow_non_exact or a.stock
+    if a.confirm:
+        ru = plan.runner_up(rows, row, a.need, a.objective, free, a.margin, ram_free_mib=ram_free,
+                            ram_floor_mib=a.ram_floor, allow_non_exact=allow, **filters)
+        copt = confirm.ConfirmOptions(rounds=a.confirm_rounds, slow=a.slow)
+        if ru is None:
+            say("confirm: no runner-up under the same filters (and exact class); the plan stands unconfirmed")
+            d = None
+        else:
+            say(f"confirm: {confirm.describe(row)} (plan) against {confirm.describe(ru)} (runner-up), "
+                f"{a.confirm_rounds} rounds")
+            d = confirm.ab(eng, a.model, row, ru, log, copt, say=say)
+            if "live_check" in d:
+                say(d["live_check"]["message"])
+        recs = confirm.records(row, ru, d, copt)
+        for r, rec in recs:
+            r["confirmed"] = rec
+        confirm.write_back(PROFILES, [(r, "confirmed", rec) for r, rec in recs])
+        if d is not None:
+            say(f"confirm: the runner-up won {d['runner_up_wins']} of {d['rounds']} rounds (needs {d['wins_needed']}), "
+                f"median ratio {d['median_ratio']}: "
+                + ("serving the runner-up" if d["outcome"] == "replaced" else "keeping the plan"))
+            if d["outcome"] == "replaced":
+                doc = next(dd for p, dd in docs if p.name == ru["_file"])
+                reasons, _ = launch.check(ru, doc, a.model, mid, eng, stock=a.stock, vram_free_mib=free,
+                                          margin_mib=a.margin, ram_free_mib=ram_free, ram_floor_mib=a.ram_floor)
+                if reasons:
+                    return _plan_fail(a, "launch checks failed for the confirmed runner-up: " + "; ".join(reasons),
+                                      rows, free, reasons=reasons)
+                row = ru
+    gate_text = a.gate_prefix.read_text(encoding="utf-8") if a.gate_prefix is not None else None
+    opt = serve.ServeOptions(port=a.port, internal_port=eng.port, need=a.need, objective=a.objective,
+                             margin_mib=a.margin, ram_floor_mib=a.ram_floor, queue=a.queue,
+                             queue_timeout_s=a.queue_timeout, interval_s=a.interval, persist_s=a.persist,
+                             drain_s=a.drain, max_restarts=a.max_restarts, cache_prompt=a.cache_prompt == "on",
+                             gate_prefix=gate_text, live_n=a.live_n, slow=a.slow, allow_non_exact=allow, **filters)
     try:
-        while eng.proc and eng.proc.poll() is None:
-            time.sleep(2)
+        sess, why = serve.open_session(eng, a.model, rows, row, opt, log, profile_dir=PROFILES, say=say)
+    except OSError as e:
+        eng.stop()
+        return _plan_fail(a, f"could not open port {a.port} for the front proxy: {e}", rows, free)
+    if sess is None:
+        say(why)
+        return 2
+    say(f"serving {a.model.name} on http://127.0.0.1:{a.port} (llama-server on {eng.port}; one request at a time; "
+        f"prompt reuse {'on' if opt.cache_prompt else 'off'}; Ctrl+C stops)")
+    try:
+        while not sess.sup.done.wait(1):
+            pass
     except KeyboardInterrupt:
         pass
     finally:
-        eng.stop()
+        sess.close()
+    if sess.sup.state == "gave_up":
+        say(f"stopped: {sess.sup.reason}")
+        return 2
     return 0
 
 

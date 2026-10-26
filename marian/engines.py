@@ -144,6 +144,7 @@ class LlamaCpp:
         self.port = port
         self.base = f"http://127.0.0.1:{port}"
         self.proc: subprocess.Popen | None = None
+        self.server_extra: list[str] = []   # serve-time flags that are not part of a profiled configuration
         self._caps: dict | None = None
         self._version: str | None = None
 
@@ -176,7 +177,7 @@ class LlamaCpp:
             cmd += ["--moe-tier-mib", str(c.tier_mib)]
         if c.ring_mib is not None:
             cmd += ["--moe-ring-mib", str(c.ring_mib)]
-        return cmd + c.extra
+        return cmd + c.extra + self.server_extra
 
     def start(self, model: Path, c: Config, log: Path, timeout: float = 900, attempts: int = 3) -> tuple[bool, str]:
         cmd = self.command(model, c)
