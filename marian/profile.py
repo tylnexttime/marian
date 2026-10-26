@@ -12,21 +12,68 @@ Each row also records the GPU memory already in use just before its server start
 other programs) and the model's own share (`vram_model_mib` = peak minus that baseline), so a planner can re-check
 the fit against the VRAM free at launch. The baseline is read once per row; other programs' use can still drift
 while the row runs.
+
+**Cache arms (M1.3, calibration v1).** When the engine is a Marian build (its --help lists the P3 flags) and the
+model is MoE, each (context, KV) cell also gets, after the walk:
+
+1. **A VRAM cliff finder** over `--moe-cache-mib`, every expert layer kept in host memory (`-ncmoe` = all layers), as
+   every measured cache arm ran. The bottom of the bracket is the exactness floor (patch 0001: below it the server
+   refuses to start; that refusal is correct and is recorded as `refused`, never treated as a crash, and the minimum
+   it names replaces a floor computed from the GGUF if they differ). The top is the budget that caches every expert,
+   capped by the VRAM left beside the model's other weights, KV and buffers (the share of the walk's all-experts-on-CPU
+   point) and the margin. The floor is probed first (the speed reference), then the top; if the top overflows, the
+   bracket is bisected down to `resolution_mib`, never probing above a known overflow. An overflow is the walk's rule.
+2. **The miss sources at the best budget**: the staging ring, then a small ladder of pinned RAM tier sizes, ascending,
+   inside a RAM safety envelope: never pin more than (RAM available now - floor), floor 6 GiB by default. A tier is
+   pinned, so the desktop cannot page it: with about 25 GB of 32 GB in desktop use, plain `-ncmoe` beat the cache
+   (15.0 against 13.4 tok/s, 24/10/2026), and the tier costs prefill 4-5x against stock. So it is measured here, per
+   machine, never assumed. When every expert fits in the cache there are no misses, and the sources are skipped.
+
+Cache arms load memory-mapped (`-lm mmap`): the ring and tier read a miss by its offset in the model's mapped files
+(without a mapping the fork logs "--moe-miss-source is not used"), and every measured cache arm ran mapped. The walk
+keeps M0's `-lm none`.
+
+Every row records `exact_class`: every expert computed on the GPU (full offload, or any cache arm) or not (stock
+`-ncmoe` > 0, which changed answers in A22). `plan --exact-only` filters on it. Rows also record the RAM available
+before the server started and its low point, the commit headroom low point, and the server's peak working set and
+commit where the OS gives them.
 """
 from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import http.client
 import json
+import re
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
-from . import gguf, machine
-from .engines import Config, LlamaCpp
+from . import geometry, gguf, machine
+from .engines import RING_DEFAULT_MIB, Config, LlamaCpp
 
 FILLER = ("The workshop opens at eight. Apprentices sign in, check the job board and collect their tools. "
           "Safety briefings come first, then practical tasks, then a short review before lunch. ")
+
+# what the fork's log says, matched on the message text (the prefix and timestamp vary by log format)
+FLOOR_RE = re.compile(r"below the exact-mode floor of (\d+) MiB[^\r\n]*?use --moe-cache-mib (\d+) or more")
+NOT_USED_RE = re.compile(r"--moe-miss-source is not used, misses are uploaded from the host tensors: ([^\r\n]*)")
+PINNED_RE = re.compile(r"Marian P3 \(experimental\) \w+:[^\r\n]*?([\d.]+) MiB pinned(?: \(\+([\d.]+) MiB PAGEABLE)?")
+PATHLIKE = re.compile(r"[A-Za-z]:[\\/][^\s'\"]*|/(?:home|Users|mnt|media)/[^\s'\"]*")
+
+
+@dataclass
+class CacheOptions:
+    """The cache arms of a profile (Marian builds and MoE models only)."""
+    enabled: bool = True
+    resolution_mib: int = 256            # the cliff finder stops when its bracket is this narrow (design 6.1)
+    max_cache_mib: int | None = None     # never offer the cache more than this (VRAM kept for other programs)
+    ram_floor_mib: int = 6144            # the RAM envelope: never pin more than (RAM available - this)
+    tier_ladder_mib: tuple[int, ...] = (1024, 2048, 4096, 6144, 8192, 12288, 16384)
+    tier_steps: int = 3                  # measure at most this many tier sizes: the largest the envelope allows
+    ring: bool = True
+    n_ubatch: int = 512                  # the server's default; the exactness floor depends on it
 
 
 def sha256_head(path: Path, n: int = 64 * 2**20) -> str:
@@ -42,6 +89,7 @@ class PeakSampler(threading.Thread):
     def __init__(self, every: float = 0.5):
         super().__init__(daemon=True)
         self.every, self.vram, self.ram_low, self._halt = every, 0, 10**9, threading.Event()  # not _stop: Thread has one
+        self.commit_low: int | None = None
 
     def run(self):
         while not self._halt.is_set():
@@ -49,6 +97,9 @@ class PeakSampler(threading.Thread):
             if used:
                 self.vram = max(self.vram, used[0])
             self.ram_low = min(self.ram_low, machine.ram_mib()[1])
+            commit = machine.commit_mib()
+            if commit:
+                self.commit_low = commit[1] if self.commit_low is None else min(self.commit_low, commit[1])
             time.sleep(self.every)
 
     def stop(self):
@@ -66,64 +117,300 @@ def probe(engine: LlamaCpp, ctx: int, n_predict: int) -> dict:
 
 
 def splits(summary: dict, step: int) -> list[tuple[str, int]]:
+    """The walk, conservative to aggressive. It always ends on the all-on-GPU point (the exact one for a MoE model),
+    even when the step does not divide the layer count (M0 skipped it: 30 layers in steps of 4 ended at 2)."""
     n = summary["block_count"] or 0
     if summary["moe"]:
-        return [("n_cpu_moe", k) for k in range(n, -1, -step)]          # all experts on CPU -> none
-    return [("n_gpu_layers", k) for k in range(max(0, n // 4), n + 2, step)]  # a quarter on GPU -> all
+        ks = list(range(n, -1, -step))                  # all experts on CPU -> none
+        return [("n_cpu_moe", k) for k in ks + ([0] if ks[-1] != 0 else [])]
+    ks = list(range(max(0, n // 4), n + 2, step))       # a quarter on GPU -> all (n + 1 includes the output layer)
+    return [("n_gpu_layers", k) for k in ks + ([n + 1] if ks[-1] != n + 1 else [])]
+
+
+def read_server_log(text: str) -> dict:
+    """What a server's log says about a cache arm: a refusal below the exactness floor (and the minimum it names), a
+    miss source the fork did not use (and why), and the memory the source pinned (or failed to pin)."""
+    out: dict = {}
+    m = FLOOR_RE.search(text)
+    if m:
+        out["refusal"] = f"below the exact-mode floor of {m.group(1)} MiB; the server asks for {m.group(2)} MiB or more"
+        out["floor_min_mib"] = int(m.group(2))
+    m = NOT_USED_RE.search(text)
+    if m:
+        out["source_not_used"] = PATHLIKE.sub("<path>", m.group(1).strip())[:200]
+    m = PINNED_RE.search(text)
+    if m:
+        out["pinned_mib"] = round(float(m.group(1)))
+        if m.group(2):
+            out["pageable_mib"] = round(float(m.group(2)))      # pinning failed for this much; it runs pageable
+    return out
+
+
+def _log_since(log: Path, offset: int) -> str:
+    try:
+        with open(log, "rb") as f:
+            f.seek(offset)
+            return f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def measure(engine, model: Path, c: Config, row: dict, log: Path, n_predict: int) -> dict:
+    """Start one server for configuration c, probe it, stop it. Records speed, VRAM (peak, the desktop's baseline, the
+    model's share), RAM (available before, lowest), commit headroom, the server's peak working set and commit, and what
+    its log says; a refusal below the exactness floor becomes status `refused`, a miss source the fork did not use
+    becomes `not_applied` (the row would not be what it claims)."""
+    before = machine.gpu_memory_used_mib()
+    baseline = before[0] if before else None
+    row["ram_free_before_mib"] = machine.ram_mib()[1]
+    offset = log.stat().st_size if log.exists() else 0
+    sampler = PeakSampler()
+    sampler.start()
+    ok, why = engine.start(model, c, log)
+    try:
+        if not ok:
+            row.update(status="start_failed", note=why)
+        else:
+            try:
+                row.update(probe(engine, c.ctx, n_predict))
+                row["status"] = "ok"
+            except (OSError, ValueError, http.client.HTTPException) as e:   # a timeout or a dropped server is a row
+                row.update(status="probe_failed", note=PATHLIKE.sub("<path>", f"{type(e).__name__}: {e}")[:200])
+            proc = getattr(engine, "proc", None)
+            if row["status"] == "ok" and proc is not None and proc.poll() is None:
+                row.update(machine.process_memory_mib(proc.pid))
+    finally:
+        engine.stop()
+        sampler.stop()
+    row.update(vram_peak_mib=sampler.vram, vram_baseline_mib=baseline,
+               vram_model_mib=(max(sampler.vram - baseline, 0) if baseline is not None and sampler.vram else None),
+               ram_avail_low_mib=sampler.ram_low)
+    if sampler.commit_low is not None:
+        row["commit_avail_low_mib"] = sampler.commit_low
+    said = read_server_log(_log_since(log, offset))
+    if "refusal" in said:
+        row.update(status="refused", note=said["refusal"], floor_min_mib=said["floor_min_mib"])
+    if "source_not_used" in said and c.miss_source in ("ring", "tier"):
+        row.update(status="not_applied", note=f"the fork did not use --moe-miss-source {c.miss_source}: {said['source_not_used']}")
+    for k in ("pinned_mib", "pageable_mib"):
+        if k in said:
+            row[k] = said[k]
+    return row
+
+
+def judge(row: dict, total_vram: int, margin_mib: int, best: float, collapse: float) -> None:
+    """M0's overflow rule, applied to an ok row in place: VRAM within the margin of full, or decode below collapse x
+    the best point so far (Windows pages GPU memory into system RAM instead of failing)."""
+    if row["status"] != "ok":
+        return
+    near_full = total_vram and row["vram_peak_mib"] >= total_vram - margin_mib
+    cliff = best and row["tg_tps"] < best * collapse
+    if near_full or cliff:
+        row["status"] = "overflow"
+        row["note"] = "VRAM near full" if near_full else f"speed collapse vs best {best}"
+
+
+def find_cliff(probe_budget, lo: int, hi: int, resolution: int = 256, collapse: float = 0.6) -> int | None:
+    """The largest --moe-cache-mib in [lo, hi] that runs without overflow, or None if even lo does not.
+
+    probe_budget(mib) starts a server at that budget and returns its row (status ok | overflow | refused | ...; the
+    caller has already applied the VRAM-near-full rule). Here a row that is ok but decodes below collapse x the best
+    good cache point is marked an overflow: the paging cliff. lo first (it is the speed reference), then hi; if hi is
+    bad, bisect between the highest good and the lowest bad budget, in 64 MiB steps, until they are `resolution`
+    apart. Every probe lies between a known good and a known bad budget, so none is ever above a known overflow. Speed
+    is assumed to rise with the budget until the cliff (a larger cache only adds hits)."""
+    best = 0.0
+
+    def good(row: dict) -> bool:
+        nonlocal best
+        if row["status"] == "ok" and best and row["tg_tps"] < best * collapse:
+            row["status"], row["note"] = "overflow", f"speed collapse vs best cache point {best}"
+        if row["status"] != "ok":
+            return False
+        best = max(best, row["tg_tps"])
+        return True
+
+    first = probe_budget(lo)
+    if first["status"] == "refused" and (first.get("floor_min_mib") or 0) > lo:
+        lo = first["floor_min_mib"]                     # the server's own floor beats the one computed from the GGUF
+        if lo > hi:
+            return None
+        first = probe_budget(lo)
+    if not good(first):
+        return None
+    if hi <= lo:
+        return lo
+    if good(probe_budget(hi)):
+        return hi
+    ok_b, bad_b = lo, hi
+    while bad_b - ok_b > resolution:
+        mid = (ok_b + bad_b) // 2 // 64 * 64
+        if mid <= ok_b:
+            break
+        if good(probe_budget(mid)):
+            ok_b = mid
+        else:
+            bad_b = mid
+    return ok_b
+
+
+def tier_ladder(ram_available_mib: int, floor_mib: int, useful_mib: int | None, ladder: tuple[int, ...], steps: int,
+                ring_mib: int = RING_DEFAULT_MIB) -> list[int]:
+    """Tier sizes to measure, ascending: the largest `steps` ladder sizes inside the RAM envelope, where a tier plus
+    its staging ring never pins more than (RAM available - floor). A tier larger than the experts the VRAM cache does
+    not hold (useful_mib) buys nothing, so that caps it too."""
+    cap = ram_available_mib - floor_mib - ring_mib
+    if useful_mib is not None:
+        cap = min(cap, useful_mib)
+    fits = [t for t in sorted(ladder) if 0 < t <= cap]
+    return fits[-steps:] if steps > 0 else []
+
+
+def model_geometry(model: Path) -> geometry.Geometry | None:
+    """Expert geometry from the GGUF headers (every shard of a split model), or None if it cannot be read: then the
+    floor comes from the server's own refusal and the top of the bracket from VRAM alone."""
+    m = re.match(r"(.*-)(\d{5})-of-(\d{5})\.gguf$", model.name)
+    shards = [model]
+    if m:
+        shards = [model.with_name(f"{m.group(1)}{i:05d}-of-{m.group(3)}.gguf") for i in range(1, int(m.group(3)) + 1)]
+    try:
+        return geometry.from_gguf(shards)
+    except (OSError, ValueError):
+        return None
+
+
+def cache_arms(model: Path, engine, s: dict, geom, ctx: int, kv: str, threads: int | None, walk_rows: list[dict],
+               log: Path, total_vram: int, n_predict: int, margin_mib: int, collapse: float,
+               opt: CacheOptions) -> tuple[list[dict], dict]:
+    """The cliff finder and the miss sources for one (context, KV) cell; returns its rows and a summary of the search."""
+    n = s["block_count"] or 0
+    summary: dict = {"ctx": ctx, "kv": kv}
+    rows: list[dict] = []
+    base = next((r for r in walk_rows if r.get("n_cpu_moe") == n and r["status"] == "ok"), None)
+    if base is None:
+        summary["skipped"] = "the all-experts-on-CPU point did not run, so the VRAM left for a cache is unknown"
+        return rows, summary
+    lo = geometry.floor_mib(geom, opt.n_ubatch) if geom else 256        # without geometry, a refusal names the floor
+    full = geometry.full_mib(geom, opt.n_ubatch) if geom else None
+    share = base.get("vram_model_mib") or base.get("vram_peak_mib")
+    used = machine.gpu_memory_used_mib()
+    room = total_vram - used[0] - margin_mib - share if (total_vram and used and share) else None
+    tops = [x for x in (full, room, opt.max_cache_mib) if x is not None]
+    summary.update(floor_mib=lo, full_mib=full, vram_room_mib=room, max_cache_mib=opt.max_cache_mib)
+    if not tops:
+        summary["skipped"] = "neither the model's geometry nor the free VRAM bounds the cache budget"
+        return rows, summary
+    hi = min(tops)
+    summary["hi_mib"] = hi
+    if hi < lo:
+        summary["skipped"] = f"the exactness floor ({lo} MiB) is above the largest budget that fits ({hi} MiB)"
+        return rows, summary
+
+    def run_one(budget: int, arm: str, **src) -> dict:
+        c = Config(ctx=ctx, cache_type=kv, threads=threads, n_gpu_layers=999, n_cpu_moe=n, load_mode="mmap",
+                   moe_cache_mib=budget, **src)
+        row = dict(c.to_row(), arm=arm, exact_class=c.exact_class(n))
+        measure(engine, model, c, row, log, n_predict)
+        judge(row, total_vram, margin_mib, 0.0, collapse)            # VRAM near full; speed is judged by the caller
+        rows.append(row)
+        print(json.dumps(row), flush=True)
+        time.sleep(5)
+        return row
+
+    best = find_cliff(lambda b: run_one(b, "cache"), lo, hi, opt.resolution_mib, collapse)
+    summary["best_mib"] = best
+    summary["probes"] = len(rows)
+    if best is None:
+        summary["skipped_sources"] = "no cache budget ran without overflow"
+        return rows, summary
+    if full is not None and best >= full:
+        summary["skipped_sources"] = "every expert fits in the VRAM cache: no misses to serve"
+        return rows, summary
+    if opt.ring:
+        free = machine.ram_mib()[1]
+        if RING_DEFAULT_MIB <= free - opt.ram_floor_mib:
+            run_one(best, "source", miss_source="ring")
+        else:
+            summary["ring"] = f"skipped: {free} MiB available leaves less than the {opt.ram_floor_mib} MiB floor"
+    free = machine.ram_mib()[1]
+    sizes = tier_ladder(free, opt.ram_floor_mib, (full - best) if full is not None else None, opt.tier_ladder_mib,
+                        opt.tier_steps)
+    summary["ram_envelope"] = {"ram_available_mib": free, "floor_mib": opt.ram_floor_mib,
+                               "pin_max_mib": free - opt.ram_floor_mib, "tier_mib": sizes}
+    for t in sizes:
+        now = machine.ram_mib()[1]                           # the desktop may have grown since the ladder was cut
+        if t + RING_DEFAULT_MIB > now - opt.ram_floor_mib:
+            summary["ram_envelope"]["stopped"] = f"tier {t} MiB: {now} MiB available now leaves less than the floor"
+            break
+        r = run_one(best, "source", miss_source="tier", tier_mib=t)
+        if r["status"] == "ok" and r["ram_avail_low_mib"] < opt.ram_floor_mib:
+            r["status"] = "ram_envelope"
+            r["note"] = f"RAM available fell to {r['ram_avail_low_mib']} MiB, below the {opt.ram_floor_mib} MiB floor"
+        if r["status"] != "ok":
+            summary["ram_envelope"]["stopped"] = f"tier {t} MiB: {r['status']}"
+            break
+    return rows, summary
+
+
+def _capabilities(engine) -> dict:
+    caps = getattr(engine, "capabilities", None)            # an engine without it (or a broken --help) is not Marian
+    try:
+        return caps() if caps else {}
+    except Exception:                                      # noqa: BLE001
+        return {}
 
 
 def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: int, threads: int | None,
-        out_dir: Path, n_predict: int = 64, vram_margin_mib: int = 300, collapse: float = 0.6) -> Path:
+        out_dir: Path, n_predict: int = 64, vram_margin_mib: int = 300, collapse: float = 0.6,
+        cache: CacheOptions | None = None) -> Path:
+    cache = cache or CacheOptions()
     s = gguf.summary(model)
     m = machine.detect()
     total_vram = m.gpus[0].vram_mib if m.gpus else 0
+    caps = _capabilities(engine)
+    with_cache = bool(cache.enabled and s["moe"] and caps.get("marian"))
+    geom = model_geometry(model) if with_cache else None
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{m.fingerprint()}-{sha256_head(model)}-{engine.name}"
     log = out_dir / f"{stem}.server.log"
-    rows = []
+    rows, searches = [], []
     for kv in kvs:
         for ctx in ctxs:
-            best = 0.0
+            best, cell = 0.0, []
             for knob, k in splits(s, step):
                 c = Config(ctx=ctx, cache_type=kv, threads=threads)
                 if knob == "n_cpu_moe":
                     c.n_gpu_layers, c.n_cpu_moe = 999, k
                 else:
                     c.n_gpu_layers = k
-                row = {"ctx": ctx, "kv": kv, knob: k, "threads": threads}
-                before = machine.gpu_memory_used_mib()
-                baseline = before[0] if before else None
-                sampler = PeakSampler()
-                sampler.start()
-                ok, why = engine.start(model, c, log)
-                try:
-                    if not ok:
-                        row.update(status="start_failed", note=why)
-                    else:
-                        row.update(probe(engine, ctx, n_predict))
-                        row["status"] = "ok"
-                finally:
-                    engine.stop()
-                    sampler.stop()
-                row.update(vram_peak_mib=sampler.vram, vram_baseline_mib=baseline,
-                           vram_model_mib=(max(sampler.vram - baseline, 0) if baseline is not None and sampler.vram else None),
-                           ram_avail_low_mib=sampler.ram_low)
-                if row["status"] == "ok":
-                    near_full = total_vram and sampler.vram >= total_vram - vram_margin_mib
-                    cliff = best and row["tg_tps"] < best * collapse
-                    if near_full or cliff:
-                        row["status"] = "overflow"
-                        row["note"] = "VRAM near full" if near_full else f"speed collapse vs best {best}"
-                    best = max(best, row["tg_tps"]) if row["status"] == "ok" else best
-                rows.append(row)
+                row = dict(c.to_row(), arm="walk", exact_class=c.exact_class(s["block_count"]))
+                measure(engine, model, c, row, log, n_predict)
+                judge(row, total_vram, vram_margin_mib, best, collapse)
+                best = max(best, row["tg_tps"]) if row["status"] == "ok" else best
+                cell.append(row)
                 print(json.dumps(row), flush=True)
-                if row["status"] in ("overflow", "start_failed"):
+                if row["status"] != "ok":
                     break
                 time.sleep(5)
-    doc = {"marian_profile": 1, "measured_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-           "machine": m.to_dict(), "engine": {"name": engine.name, "version": engine.version()},
+            rows += cell
+            if with_cache:
+                crows, summary = cache_arms(model, engine, s, geom, ctx, kv, threads, cell, log, total_vram, n_predict,
+                                            vram_margin_mib, collapse, cache)
+                rows += crows
+                searches.append(summary)
+    doc = {"marian_profile": 2, "measured_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+           "machine": m.to_dict(),
+           "engine": {"name": engine.name, "version": engine.version(), "marian": bool(caps.get("marian")),
+                      "moe_flags": caps.get("moe_flags", [])},
            "model": {"file": model.name, "id": sha256_head(model), **s}, "probe": {"fill": 0.75, "n_predict": n_predict},
            "rows": rows}
+    if with_cache:
+        doc["cache_search"] = {"ram_floor_mib": cache.ram_floor_mib, "resolution_mib": cache.resolution_mib,
+                               "cells": searches}
+    elif cache.enabled and s["moe"]:
+        doc["cache_search"] = {"skipped": "the engine is not a Marian build (its --help lacks the P3 flags)"}
     out = out_dir / f"{stem}.json"
+    if out.exists():                                     # a new profile replaces the old one; keep one previous copy
+        out.replace(out.with_name(out.name + ".prev"))
     out.write_text(json.dumps(doc, indent=1), encoding="utf-8")
     return out
