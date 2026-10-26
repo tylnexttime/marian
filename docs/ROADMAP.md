@@ -13,13 +13,13 @@ gate). Evidence marked *theirs* comes from another project's own machine and has
 - **Decode is solved on the reference laptop:** the P3 pinned tier meets the M1 exit, exactly (README, JOURNEY A21-A22).
 - **Prefill is the obstacle.** With the tier, a 16K prompt runs 4-5x slower than stock. Large batches still fault
   experts through the memory map, and the pinned tier takes the page cache they need.
-- **A new suspect for the prefill cost** (found 27/10/2026, not yet measured as a cause): Swift's per-layer embedding
-  table `per_layer_token_embd` is **26.8 GiB**, beside 33.0 GiB of routed experts, on a 32 GB machine. It is read row
-  by row through the same memory map, so its pages compete with the experts' pages in memory.
-  - ik_llama.cpp found the same table evicting expert pages and fixed it by prefetching each batch's rows: prompt speed
-    154.7 -> 203.0 tok/s (*theirs*).
-  - Upstream llama.cpp, and so our base, already does that row prefetch.
-  - The open question is page granularity: each 90-byte row brings in a whole 4 KiB page. Test E49 measures it.
+- **Where the prefill time goes (E49, 27/10/2026): expert page faults, not the embedding table.**
+  - **The suspect:** Swift's per-layer embedding table is 26.8 GiB, beside 33.0 GiB of experts on a 32 GB machine.
+  - **Measured with `wsprobe`** (tools/wsprobe, no admin needed): the table held at most 0.48 GiB of the server's
+    memory in any arm. A 16K prompt can touch at most 1.18 GiB of it (16 rows of 90 bytes per token), and upstream
+    already prefetches those rows.
+  - **What does hurt:** with the 6 GiB tier, prefill runs about 38,700 single-page disk reads per second, which is
+    expert pages faulting in under memory pressure. That makes the P3 prefill source below the first fix.
 - **The use case that drives the work:** a PII/sensitivity gate on 4-30B models, on an 8 GB GPU beside a desktop that
   uses most of 32 GB. Prefill matters as much as decode there, and today stock offload wins that case.
 
@@ -36,9 +36,8 @@ before the build.
 
 | Item | Class | Why | Evidence | Effort |
 |---|---|---|---|---|
-| **Measure first: page-cache residency by tensor kind** (PLE, experts, other) during pp16K, tier on and off | test | Decide whether PLE pollution or tier pinning causes the 4-5x | our tensor sizes; ik #2389 | S |
-| **PLE row source**: upstream already marks the table lazy and prefetches each batch's rows (`llama_prefetch_rows`, `PrefetchVirtualMemory` on Windows), as ik_llama.cpp does. What may remain is page granularity: a 90-byte IQ4_NL row costs a whole 4 KiB page, about 45x amplification. If E49 shows PLE pages crowding out experts, gather the rows into a small private buffer instead | E | Swift's 26.8 GiB table; Gemma 4 E-models have PLE too | ik_llama.cpp #2389, #2692, #2563 (*theirs*); upstream's own prefetch | S-M |
-| **Prefill misses through P3**: route the large-batch selective copy through the unbuffered ring and tier, not mmap faults | E | P3 serves decode only today | our E40/E44 | M |
+| ~~Measure first: residency by tensor kind~~ **done (E49)**: the embedding table is ruled out; expert page faults are the cost | test | | `wsprobe` | done |
+| **Prefill misses through P3** (patches 0007 + 0008, test E51, in progress): route the large-batch selective copy through the unbuffered ring and tier, not memory-map faults; pin the tier in chunks under a RAM cap | E | P3 serves decode only today; E49 measured about 38,700 4 KiB faults per second during the tier's prefill | our E40/E44/E49 | M |
 | **Prefill expert prefetch**: read layer l+1's experts while layer l computes | E | The fault stalls are serial today | ik_llama.cpp #2101, #2667: 1.9-2.7x on models larger than RAM (*theirs*, Linux) | M |
 | **Pin mapped expert ranges** (upstream #31122, closed by a bot, not on merit) as a measured arm | E | Prompt speed +27-44% (*theirs*) | upstream PR #31122 | S |
 | **Layer-major chunked prefill**, then refill the cache with the prompt's hottest experts | E at a fixed ubatch | Moves M5 forward: a 12 GB card prefilled 231 tok/s at 8K this way | Strata v0.2.4; MoE-CORE (arXiv 2610.01950); Maya #352 (*theirs*) | L |
