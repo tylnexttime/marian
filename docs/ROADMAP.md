@@ -43,21 +43,41 @@ before the build.
 | **Pin mapped expert ranges** (upstream #31122, closed by a bot, not on merit) as a measured arm | E | Prompt speed +27-44% (*theirs*) | upstream PR #31122 | S |
 | **Layer-major chunked prefill**, then refill the cache with the prompt's hottest experts | E at a fixed ubatch | Moves M5 forward: a 12 GB card prefilled 231 tok/s at 8K this way | Strata v0.2.4; MoE-CORE (arXiv 2610.01950); Maya #352 (*theirs*) | L |
 
-### 3. Calibration v1 (M1.3): Python side built 27/10/2026; governor, live confirmation and learned counts not yet
+### 3. Calibration v1 (M1.3): built in Python 27/10/2026 except learned counts; tested offline; one machine
 
 Built from the design, plus safety and method rules other projects paid for:
 
 - A first-launch calibration gate: no serving until this machine has been measured (a project rule).
-- Cache-aware profiles and plans: the cache budget, miss source and tier size are restored at launch.
+- Cache-aware profiles and plans: the cache budget, miss source, tier size and thread count are restored at launch.
 - A VRAM cliff finder, a RAM safety envelope, `serve --stock` rollback, launch checks, `marian diag`.
-- **Pin in chunks under a cap** (E). On Windows the driver limits pinned memory per allocation and per process; a
-  one-shot pin fails and silently falls back to pageable memory. *Theirs*: ik #2604 (10.3 vs 3.6 GB/s), Maya #417.
-- **Cap the tier at about half of RAM, and copy all-or-none with a commit-room check** (E). *Theirs*: upstream #31122's
-  Windows note, Maya v1.1.27, Strata v0.2.6. This means re-testing our partial 6 GiB tier.
-- **Keep a faster path only if a live A/B confirms it** (Strata v0.2.5), and **sweep CPU threads**: Maya #433 saw
-  15 -> 41 tok/s with fewer threads (*theirs*).
-- **Fixed-prefix KV reuse for the gate** (E at a qualified boundary): a gate re-reads the same instructions every
-  time. Strata v0.2.3 reused 91% of a shared prompt (*theirs*). Proven exact here before it becomes a default.
+- **CPU thread sweep** (E), built 27/10: rows that compute on the CPU are measured again at physical cores, cores - 2,
+  cores / 2, 8 and 4 threads; the planner picks the fastest. Maya #433 saw 15 -> 41 tok/s with fewer threads
+  (*theirs*). Not yet run on the GPU.
+- **Keep a faster path only if a live A/B confirms it** (Strata v0.2.5), built 27/10: a passive live check on the
+  first 8 answers (says so when decode is more than 15% below the profile), and `serve --confirm`, 4 ABBA rounds
+  against the runner-up of the same exactness; the runner-up wins only with 3 of 4 rounds and a median above +2%.
+  The outcome is written into the profile.
+- **Serving envelope and memory governor** (design 7.7 after C-02, 7.8 after C-23), built 27/10: a front proxy runs
+  one request at a time with one queued, answers 503 with a reason, and streams; the governor pauses admission when
+  free VRAM, available RAM or commit headroom cross the launch floors, and after 10 s restarts llama-server on the
+  next smaller measured row (exact stays exact), giving up after 3 restarts. Tested offline against a fake server
+  and fake readings; **not yet run against a real competing allocation** (the M1.3 exit asks for exactly that).
+- **Fixed-prefix KV reuse for the gate**: a gate re-reads the same instructions every time. Strata v0.2.3 reused 91%
+  of a shared prompt (*theirs*). Plumbed (`--cache-prompt on`, `--gate-prefix FILE`), **off by default** until test
+  E52 shows it exact. E52's registered run is still to be made (the GPU was held past its 90-minute wait); its
+  instrument check (27/10, all-VRAM Gemma, 3 reused pairs) found every reused answer different from its fresh twin
+  (max |d logprob| 1.28), so the likely outcome is class A. On Gemma 4 (sliding-window attention) llama-server
+  reuses a prefix through `/completion` only after a short previous prompt, and through `/v1/chat/completions`
+  always (it checkpoints the window at the user turn).
+
+Still to build:
+
+- **Pin in chunks under a cap** (E, in the fork). On Windows the driver limits pinned memory per allocation and per
+  process; a one-shot pin fails and silently falls back to pageable memory. *Theirs*: ik #2604 (10.3 vs 3.6 GB/s),
+  Maya #417.
+- **Cap the tier at about half of RAM, and copy all-or-none with a commit-room check** (E, in the fork). *Theirs*:
+  upstream #31122's Windows note, Maya v1.1.27, Strata v0.2.6. This means re-testing our partial 6 GiB tier.
+- Learned counts (P4), and the governor reading the DXGI budget rather than `nvidia-smi`.
 - Build on upstream's **#30966** (`--moe-cache-cpu-share` + `moe-cache-tune.py`) rather than duplicate it. Computing
   misses on the CPU changes rounding, so it is class A here: opt-in.
 
@@ -133,6 +153,8 @@ gate should use a model whose licence fits the deploying organisation.
 | 4 | Exactness proved at top-3 log-probability, not full logits; no E0 harness or parity matrix | M1.2 above |
 | 5 | Most arms ran one or two rounds | five rounds only for the decode exit; repeat any result that changes a default |
 | 6 | The build has no C++ exception unwinding (`/EHsc` off) | to fix with the rebase build |
-| 7 | One sequence at a time | by design until M1.3's serving rules |
+| 7 | One sequence at a time | by design: since 27/10 `serve`'s proxy enforces it (one running, one queued, 503 with a reason); multi-sequence is M2 |
+| 10 | E52 (prefix-reuse exactness) registered run not made | to run when the GPU is free; client and inputs are ready (outside this repository) |
+| 11 | Governor, `--confirm` and thread sweep tested offline only | a live competing-allocation test is the M1.3 exit |
 | 8 | Linux paths never run; one machine only | M1.4 |
 | 9 | Swift's publisher missing from the thanks | fixed 27/10 (UkisAI) |

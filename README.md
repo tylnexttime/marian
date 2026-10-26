@@ -2,8 +2,9 @@
 
 **Run local mixture-of-experts models by what your machine can actually do, measured, not guessed.**
 
-Marian is named after a popular Polish given name. Status: **pre-release**; M1.1 and M1.2 measured (24/10/2026), the
-Python side of M1.3's calibration v1 built (27/10/2026). The full
+Marian is named after a popular Polish given name. Status: **pre-release**; M1.1 and M1.2 measured (24/10/2026),
+M1.3's calibration v1 built in Python (27/10/2026: calibration gate, cache arms, CPU thread sweep, live confirmation,
+and serving through a front proxy with a memory governor), tested offline and run on one machine only. The full
 story, every measured table and the mistakes are in [docs/JOURNEY.md](docs/JOURNEY.md).
 
 ## What it does
@@ -18,8 +19,8 @@ Marian has two layers.
    not one whole layer at a time**, and fetches the rest from system RAM or the SSD as fast as the machine allows. It
    builds on upstream llama.cpp's own expert cache (`--moe-cache-mib`). It is **exact by default**: speed-ups that can
    change an answer will only ever be opt-in switches. Self-calibration to the machine at hand is the design goal;
-   the Python side of calibration v1 (milestone M1.3) is built and tested offline, and has run on one machine only;
-   its memory governor, live confirmation and learned counts are not built yet.
+   calibration v1 (milestone M1.3) is built in Python and tested offline. Parts of it have run on one machine only,
+   and its memory governor has never yet met a real competing allocation; learned counts are not built.
 
 **Minimum spec we are designing for:** 32 GB of RAM plus a GPU with 8 GB of VRAM (a project decision of
 22/10/2026). The design is in [docs/design/DESIGN-M1.md](docs/design/DESIGN-M1.md).
@@ -90,7 +91,8 @@ These are why a measuring tool matters. Sources and conditions for every figure 
 | Exactness floor (per-group slot floor, refusal below it) | Marian | built, passed its test |
 | P3 miss source (`--moe-miss-source mmap\|ring\|tier`, `--moe-tier-mib`, `--moe-ring-mib`) | Marian | built, measured, opt-in (default stays `mmap`) |
 | Calibration v1, Python side (M1.3): cache arms in the profiler (VRAM cliff finder, ring and tier ladder inside a RAM envelope), exact-class per row, calibration gate, launch checks, `serve --stock` rollback, `marian diag` | Marian | built, offline tests pass; one smoke run on one machine |
-| Memory governor with supervised restart, live confirmation, learned counts (rest of M1.3); ranked core, warm start, TinyLFU doorkeeper in VRAM (P2), drain removal, prefetch | Marian | designed, not built |
+| Calibration v1, serving side (M1.3): CPU thread sweep, live check and `serve --confirm` (keep-if-faster A/B), front proxy (one sequence, 503 with a reason, streaming pass-through), memory governor with supervised restart, prompt-prefix reuse off by default (register test E52) | Marian | built 27/10/2026, offline tests pass (fake engine and server); see Limitations for what has run live |
+| Learned counts (rest of M1.3); ranked core, warm start, TinyLFU doorkeeper in VRAM (P2), drain removal, prefetch | Marian | designed, not built |
 
 The patches are in [docs/m1.0/patches](docs/m1.0/patches) (P0) and [docs/m1.1/patches](docs/m1.1/patches) (0001
 exactness floor, 0002 fill trace, 0003 P3 minimal), as `git format-patch` files on top of `63b4b303`.
@@ -189,22 +191,35 @@ Be warned; this is research code.
   the real server, so its ratios flattered the ring and the tier.
 - **No routing profile, no held-out split, no learning yet.** The hit rates are upstream SLRU's, warming over a fixed
   prompt set.
-- **One sequence at a time.** Concurrent requests change the kernels and memory peaks; multi-sequence serving is not
-  supported.
+- **One sequence at a time, by design.** Concurrent requests change the kernels and memory peaks, so `serve`'s proxy
+  runs one request, queues one more and answers the rest with 503. Multi-sequence serving is M2 work.
 - **Upstream moves fast.** The cache is experimental upstream and changed three times in two weeks. On 27/10/2026 the
   fork was rebased from `a37cc461` to `63b4b303` (107 upstream commits, mechanical fixes only) and re-checked (E48):
   the Gemma cache arms are still log-probability-identical to all-VRAM, and the Swift tier still meets the decode exit
   in one round (15.1 tok/s warm, 12.6 after a 16K prompt, against 14.4-14.6 and 13.4-13.7 at the old pin). Three of
   those commits change the Swift model's numerics, so Swift's texts differ from the runs at `a37cc461`; measurements
   dated before 27/10/2026 were taken at the old pin.
-- **Calibration v1 measures, then trusts its measurement.** The planner now restores cache budgets, miss sources and
-  tier sizes into the launch configuration, and `serve` checks the chosen row against the VRAM and RAM free at
-  launch. But nothing watches memory after launch yet (no governor, no supervised restart), no live confirmation run
-  checks the winner against the runner-up, and the cliff finder assumes decode speed rises with the cache budget
-  until the cliff. The cache arms have run once on one machine (the reference laptop), with one model, and with
-  the cache capped at 2,500 MiB so that the miss sources had misses to serve: the bisection itself has only run
-  against synthetic speed and VRAM curves in the tests, not against a real paging cliff. That smoke ran the M1.2
-  build, at the old pin (`a37cc461`), not the rebased fork.
+- **Calibration v1's serving side is tested offline only.** The memory governor, the supervised restart, the front
+  proxy, the live check, `--confirm` and the CPU thread sweep (all built 27/10/2026) have run against a fake engine,
+  a fake llama-server, fake memory readings and a fake clock (30 tests; five deliberately broken versions of the code
+  each fail at least one of them). None has yet met a real competing allocation, a real paging cliff or a real
+  thread ladder on the GPU. Memory is read through `nvidia-smi`, not the DXGI budget the design asks for, so WDDM's
+  own accounting is not seen. `--confirm` runs 4 rounds with a fresh server per window, far fewer than the 64 windows
+  of Strata's rule it follows, so it can only catch large differences.
+- **Calibration v1 measures, then trusts its measurement.** The planner restores cache budgets, miss sources, tier
+  sizes and thread counts into the launch configuration, and `serve` checks the chosen row against the VRAM and RAM
+  free at launch. The cliff finder assumes decode speed rises with the cache budget until the cliff. The cache arms
+  have run once on one machine (the reference laptop), with one model, and with the cache capped at 2,500 MiB so that
+  the miss sources had misses to serve: the bisection itself has only run against synthetic speed and VRAM curves in
+  the tests, not against a real paging cliff. That smoke ran the M1.2 build, at the old pin (`a37cc461`), not the
+  rebased fork.
+- **Prompt-prefix reuse is not proven exact, so it is off.** Register test E52 asks whether an answer computed on a
+  reused prompt prefix equals the answer computed fresh. Its registered run has not been made yet: the GPU was held
+  by another test for longer than the 90 minutes E52 may wait. An instrument check before it (27/10/2026, all-VRAM
+  Gemma 4 26B-A4B IQ4_XS on the rebased build, 3 reused pairs, not counted for the verdict) found every reused answer
+  different from its fresh twin: the tokens diverged at positions 23 to 51 of 64 and log-probabilities moved by up to
+  1.28, while a fresh prompt run twice matched exactly. On this model (sliding-window attention), llama-server's
+  `/completion` reused a prefix only after a short previous prompt; `/v1/chat/completions` reused it every time.
 - The build carries no C++ exception unwinding (`/EHsc` is off, inherited from the measured builds).
 
 ## Status
@@ -215,7 +230,7 @@ Be warned; this is research code.
 | M1.0 | measured, 22-24/10/2026 | upstream cache vs stock on Swift 1.5 IQ2_XS; copy probe; 8 GB floor arms; gate and control models |
 | M1.1 | in progress | exactness floor PASS; trace-replay probe GO; P3 verify run PASS (11/11); P3 server arms measured 24/10/2026 (two rounds): the tier doubles decode, exact, but costs prefill about 3x; controls and the Maya drive test done; replay = server exactly (+0.00 points, the M1.1 exit check); five-round confirmation: decode exit met (E44); log-probability exactness against all-VRAM (E45) |
 | M1.2 | tooling done, policy deprioritised | the routing-id trace and the exact replay (A19); the ranked policy lost to upstream's SLRU on the real trace ([JOURNEY section 7](docs/JOURNEY.md#7-what-is-next)) |
-| M1.3 | Python side built, 27/10/2026 | `marian calibrate`, cache arms (cliff finder, miss sources, RAM envelope), calibration gate, launch checks, `serve --stock`, `--exact-only`, `marian diag`; 26 new offline tests, and the whole offline suite passes. One GPU smoke on the reference laptop (27/10/2026, the M1.2 build at the old pin: Gemma 4 26B-A4B IQ3_XXS, context 4096, 218 s): the gate refused before calibration, the walk, two cache budgets, the ring and two tier sizes ran, `plan`, `serve --dry-run` and `serve --stock --dry-run` passed. Not built: governor with supervised restart, live confirmation, learned counts |
+| M1.3 | Python side built, 27/10/2026 | `marian calibrate`, cache arms (cliff finder, miss sources, RAM envelope), calibration gate, launch checks, `serve --stock`, `--exact-only`, `marian diag`; 26 new offline tests, and the whole offline suite passes. One GPU smoke on the reference laptop (27/10/2026, the M1.2 build at the old pin: Gemma 4 26B-A4B IQ3_XXS, context 4096, 218 s): the gate refused before calibration, the walk, two cache budgets, the ring and two tier sizes ran, `plan`, `serve --dry-run` and `serve --stock --dry-run` passed. Serving side built the same day: CPU thread sweep, live check and `serve --confirm`, front proxy (one sequence, 503 with a reason, streaming), memory governor with supervised restart, prompt-prefix reuse off by default; 30 more offline tests (the whole suite: 118). Register test E52 (prefix-reuse exactness): registered run not yet made (GPU held by another test); its instrument check found reused answers differing from fresh ones. Not built: learned counts |
 | M1.4 onwards | not started | real-hardware validation (see [DESIGN-M1 section 10](docs/design/DESIGN-M1.md)) |
 
 **M1 exit criteria, and where each stands** (reference laptop, Swift 1.5 IQ2_XS):
@@ -276,6 +291,7 @@ python -m marian plan model.gguf --need 6000 --exact-only  # ... computing every
 python -m marian serve model.gguf --engine path/to/llama-server --need 6000     # refuses until this machine is calibrated
 python -m marian serve model.gguf --engine path/to/llama-server --need 6000 --calibrate   # calibrate first, then serve
 python -m marian serve model.gguf --engine path/to/llama-server --need 6000 --stock       # rollback: plain upstream flags
+python -m marian serve model.gguf --engine path/to/llama-server --need 6000 --confirm     # A/B the plan against the runner-up first
 python -m marian diag diag.zip model.gguf --engine path/to/llama-server   # a bundle to share: no prompts, home as ~
 ```
 
@@ -316,6 +332,39 @@ on the GPU: full offload or any cache arm) or not (stock `-ncmoe` above 0, which
 before and at its lowest, commit headroom, the server's peak working set and commit, and what the fork's log said.
 `--max-cache-mib` caps the cache, `--ram-floor` sets the floor, `--no-cache` skips the arms.
 
+Rows that compute on the CPU (stock `-ncmoe` above 0, or a dense model with layers left on the CPU) get a **CPU thread
+sweep**: the fastest such point of each context and KV type is measured again at physical cores, cores - 2,
+cores / 2, 8 and 4 threads, and every result is kept as a row, so the planner picks the fastest. CPU expert work is
+bound by memory bandwidth, and Project Maya reported 15 -> 41 tok/s with fewer threads (theirs). `--threads` fixes
+the count instead, `--no-thread-sweep` skips it. Rows that compute every expert on the GPU skip it.
+
+## How serving works
+
+`serve` puts llama-server on an internal port (`--port` + 1, 127.0.0.1 only) and a small standard-library proxy on
+`--port`. The proxy serves **one request at a time** with one more waiting (concurrent requests change the kernels and
+the memory peaks, design item C-23); past that it answers HTTP 503 with `Retry-After` and a JSON reason. Answers pass
+through as they arrive, streamed ones included.
+
+A **memory governor** reads free VRAM, available RAM and commit headroom every 2 s, against the floors the launch check
+used. If one is crossed it pauses admission at once (503, reason `memory_pressure`) and lets the running request
+finish. If the pressure lasts 10 s, it restarts llama-server on the next smaller measured configuration that fits,
+and says why in one line. An exact configuration is only replaced by an exact one unless `--allow-non-exact` is
+given. After three restarts, or when nothing smaller fits, it stops with the reason rather than let the machine page
+(upstream allocates the expert cache once, so a running server cannot shrink it; design item C-02).
+
+The proxy reads the timings of the first 8 answers and says so when live decode is more than 15% below the profiled
+rate. `--confirm` goes further before serving: the plan and the runner-up (the next best configuration of the same
+exactness) run four interleaved rounds of short windows, and the runner-up replaces the plan only if it wins at least
+3 of 4 rounds by a median of more than 2% (after Strata's keep-if-faster rule). The outcome is written into the
+profile, and the planner prefers the winner from then on.
+
+**Prompt-prefix reuse is off.** llama-server reuses the shared start of consecutive prompts by default. Whether a
+reused prefix gives the same answer as a fresh one is register test E52 (see Limitations: not shown exact so far), so
+the proxy sets `cache_prompt: false` on every generation request and llama-server starts with `--no-cache-prompt`
+where the build has it. `--cache-prompt on` opts in, and `--gate-prefix FILE` then primes the slot with a fixed
+instruction block after every start. The file must hold the exact text the requests begin with, after any chat
+template.
+
 ## Roadmap
 
 The living roadmap, with the evidence behind each item and the dev debt, is
@@ -327,9 +376,11 @@ pinning and RAM-safety rules; then the 8 GB laptop under RAM pressure. The miles
 
 - **M1.2:** a ranked policy (ranked core, warm start, doorkeeper, transient slots, budgets by need), with a bitwise
   invariance test.
-- **M1.3:** calibration v1. Built (Python side): the VRAM cliff finder, miss sources in a RAM safety envelope, the
-  plan, the calibration gate, launch checks, the `--stock` rollback and the diagnostics bundle. Still to build: a
-  live confirmation, a memory governor with supervised restart, learned counts.
+- **M1.3:** calibration v1. Built (Python): the VRAM cliff finder, miss sources in a RAM safety envelope, the CPU
+  thread sweep, the plan, the calibration gate, launch checks, the `--stock` rollback, the diagnostics bundle, live
+  confirmation, and serving through a proxy with a memory governor and supervised restart. Still to do: learned
+  counts, E52's registered run, the governor against a real competing allocation, and the Windows pinning rules
+  (pin in chunks, all-or-none tier copy) in the fork.
 - **M1.4:** real hardware: a real 8 GB GPU, Linux, a slower link and drive.
 - **M2:** the full expert source (prefill included), removing the per-layer drain, look-ahead prefetch.
 - **M3 to M5:** verified speculation, opt-in answer-changing switches with blind quality gates, and prefill work.
