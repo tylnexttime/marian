@@ -269,6 +269,8 @@ Be warned; this is research code.
   - **What is still exact:** the cache and tier arm matched all-VRAM on every request, reused prefixes included. The
     miss path is exact; the reuse is not.
   - **What it would buy:** 83% of prompt tokens saved, so it remains available as an opt-in, answer-changing switch.
+- Upstream llama.cpp moves several times a day. We rebase weekly, or at once when upstream touches what Marian
+  runs, and re-prove exactness every time (ROADMAP section 1). A daily git-only watch says when.
 - Builds up to M1.2 carried no C++ exception unwinding (`/EHsc` was off). From M1.3 the build script turns it on
   ([docs/m1.3/tools/build_m13.bat](docs/m1.3/tools/build_m13.bat)): register test E57 built the same sources both ways
   and every answer was identical (tokens, log-probabilities and top-3, max difference 0, on every exactness arm).

@@ -41,6 +41,18 @@ constructor gained `no_alloc`), but three upstream changes alter Swift's numeric
 scale move, `softplus`). Exactness is therefore re-proved from scratch at the new base. Test E48 is pre-registered
 before the build.
 
+**The rebase rule (decided 27/10/2026).**
+- **When:** rebase onto upstream weekly, or at once when an upstream commit touches what Marian runs: the MoE
+  cache, the CUDA matrix, scale and attention kernels, the Gemma and Qwen model code, or a file our patches touch.
+- **Every rebase re-proves exactness** with an E48-style check: the cache arms identical to all-VRAM, the stock
+  contrast still differing.
+- **A daily upstream watch** (git only, no model calls) does three things each morning: it lists the new upstream
+  commits, flags the ones that touch those paths, and trial-applies our whole patch stack onto upstream master. It
+  only says *when*; it never rebases.
+- **First reading (27/10, evening):** 13 commits behind `63b4b303`, and the patch stack applies cleanly. Three
+  commits touch what we run: a CUDA scale-kernel change (non-contiguous views), a KV-cache clean-up, and MoE
+  rescaling for another model family. So the next rebase is due soon, with its exactness check.
+
 ### 2. Prefill track (the main target)
 
 | Item | Class | Why | Evidence | Effort |

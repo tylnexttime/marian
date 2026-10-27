@@ -572,6 +572,11 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
     against the arm's own baseline;
   - a test that makes 0007's tier cap trigger;
   - learned counts.
+- **Rebases:** weekly, or at once when upstream touches what we run, each with an E48-style exactness check. A
+  daily upstream watch says when (ROADMAP section 1). The first reading, on the evening of 27/10, flagged three
+  commits, one of them a CUDA scale-kernel change, so the next rebase comes soon.
+- **The build:** `/EHsc` (C++ exception unwinding) is on from M1.3. E57 (A32) found every answer identical with and
+  without it.
 - **The 8 GB milestone (E50)** runs once the prefill track lands. Its rule is already written, and so is our
   prediction that the code as it stood that morning fails it. A declared-ubatch row is reported beside it.
 - **Exactness, the rest of the way:**
@@ -1420,3 +1425,23 @@ and +6% warm decode, against -6% after a long prompt, which the 377 MiB larger c
 16-18% decode gap was the machine: the same T8 configuration decoded at 11.87 that afternoon against 15.15 that
 morning. We had predicted "free" at about 65%; the reasons held, the conclusion did not. A gate declares 2048; the
 default stays 512.
+
+#### A32. E57: C++ exception unwinding (`/EHsc`) in the build
+
+Conditions: the same sources as the measured build (upstream `63b4b303` plus patches through 0009), built twice:
+without `/EHsc` (every earlier Marian build) and with it, in the same toolchain. Then E48's Gemma 4 26B-A4B IQ4_XS
+exactness arms (10 prompts × 128 tokens, top-3 log-probabilities) and one Swift T8 run. Rule registered first.
+
+| Check | Result |
+|---|---|
+| Unit tests (`ctest -L main`, the trace-id test) | 16/16 and 1/1 |
+| All-VRAM, cache (mmap), cache + tier, cache + ring: with `/EHsc` against without | 10/10 identical on each, max difference 0 over 1,280 tokens |
+| Stock contrast against all-VRAM, with `/EHsc` | still differs: 0/10, 0.590, with the same divergence points as before |
+| Swift T8 decode records against four earlier runs | 10/10 identical, 2,189 tokens |
+| Flag evidence | `/EHsc` on every C++ compile line (458); the unwinding warning gone (197 before, 0 after); the binaries changed (+65 KB, +200 KB) |
+
+Taught us: exception unwinding changes nothing we can measure in the answers, so it is the build default from M1.3
+(`docs/m1.3/tools/build_m13.bat`). Speed was unchanged within this laptop's own noise, and that noise turned out to
+be large: in one back-to-back check the old build's stock arm ran at 16.5 and then 7.8 tok/s. That is now a debt row
+of its own, to settle before the 8 GB milestone's rounds.
+
