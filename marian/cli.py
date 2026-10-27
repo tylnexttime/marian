@@ -6,7 +6,8 @@
     python -m marian calibrate MODEL.gguf --engine PATH/llama-server [--ctx 4096] [--kv f16]   (the quick profile)
     python -m marian plan MODEL.gguf --need 6000 [--objective pp] [--fit-now | --vram-free MIB] [--exact-only | --stock] [--json]
     python -m marian serve MODEL.gguf --engine PATH/llama-server --need 6000 [--port 9951] [--calibrate] [--exact-only |
-                           --stock] [--confirm] [--cache-prompt on --gate-prefix FILE] [--dry-run] [--json]
+                           --stock] [--confirm] [--governor watch|restart|off] [--cache-prompt on --gate-prefix FILE]
+                           [--dry-run] [--json]
     python -m marian diag OUT.zip [MODEL.gguf] [--engine PATH/llama-server] [--need 6000]
     python -m marian geometry SHARD.gguf [SHARD.gguf ...] -o MODEL.geometry.json
     python -m marian replay TAG.ids.bin --geometry MODEL.geometry.json --budget-mib 9400 [--requests TAG.requests.jsonl]
@@ -24,7 +25,8 @@ figure instead of measuring it. `plan --json` prints one JSON object on stdout f
 first, always checks the chosen row against the VRAM and RAM free now, and runs the launch checks of launch.py; a
 failure is a reason and exit 2 (`--json`: one object). `--stock` is the rollback: plain upstream placement only.
 Then it serves through a front proxy on --port (llama-server on --internal-port, default --port + 1): one sequence at a
-time, a memory governor with supervised restart, the passive live check, and prefix reuse off until E52 passes
+time, a memory governor (`--governor watch` by default: it warns, and pauses only on low commit headroom;
+`restart` also restarts on a measured slowdown), the passive live check, and prefix reuse off until E52 passes
 (serve.py); `--confirm` first A/B-tests the plan against the runner-up (confirm.py).
 """
 from __future__ import annotations
@@ -104,9 +106,14 @@ def main(argv=None) -> int:
                            help="prime the slot with this fixed prompt prefix after every start (needs --cache-prompt on)")
             p.add_argument("--queue", type=int, default=1, help="requests that may wait behind the running one")
             p.add_argument("--queue-timeout", type=float, default=300, metavar="S")
+            p.add_argument("--governor", choices=list(serve.GOVERNOR_LINE), default="watch",
+                           help="watch: warn on low memory, pause only on low commit headroom (default); restart: "
+                                "also restart smaller on a sustained decode slowdown, and step back up; off: none")
             p.add_argument("--interval", type=float, default=2.0, metavar="S", help="governor reading interval")
             p.add_argument("--persist", type=float, default=10.0, metavar="S",
-                           help="memory pressure lasting this long restarts the server on a smaller plan")
+                           help="--governor restart: a decode slowdown lasting this long restarts on a smaller plan")
+            p.add_argument("--step-up", type=float, default=60.0, metavar="S",
+                           help="--governor restart: memory fitting the planned row this long steps back up to it")
             p.add_argument("--drain", type=float, default=30.0, metavar="S", help="wait this long for the running request")
             p.add_argument("--max-restarts", type=int, default=3)
     p = sub.add_parser("diag", help="a diagnostics bundle (zip): machine, profiles, plan, log tails; no prompts or paths")
@@ -259,6 +266,7 @@ def _plan_or_serve(a) -> int:
                           "server_args": _server_args(a, eng, cfg),
                           "port": a.port, "internal_port": internal if serve_cmd else None,
                           "cache_prompt": (a.cache_prompt == "on") if serve_cmd else None,
+                          "governor": a.governor if serve_cmd else None,
                           "profile_file": row.get("_file")}))
     else:
         print(json.dumps(_clean(row)))
@@ -321,7 +329,8 @@ def _serve(a, eng, rows, docs, row, mid, free, ram_free, filters) -> int:
     gate_text = a.gate_prefix.read_text(encoding="utf-8") if a.gate_prefix is not None else None
     opt = serve.ServeOptions(port=a.port, internal_port=eng.port, need=a.need, objective=a.objective,
                              margin_mib=a.margin, ram_floor_mib=a.ram_floor, queue=a.queue,
-                             queue_timeout_s=a.queue_timeout, interval_s=a.interval, persist_s=a.persist,
+                             queue_timeout_s=a.queue_timeout, governor=a.governor, interval_s=a.interval,
+                             persist_s=a.persist, step_up_s=a.step_up,
                              drain_s=a.drain, max_restarts=a.max_restarts, cache_prompt=a.cache_prompt == "on",
                              gate_prefix=gate_text, live_n=a.live_n, slow=a.slow, allow_non_exact=allow, **filters)
     try:

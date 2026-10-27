@@ -177,12 +177,27 @@ def next_smaller(rows: list[dict], current: dict, need: int, objective: str = "t
         fits = [r for r in fits if (s := vram_share(r)[0]) is not None and s < cur_v]
     if "ram" in pressure:
         fits = [r for r in fits if ram_need_mib(r) < cur_r]
-    if vram_free_mib is not None:
-        fits = [r for r in fits if (s := vram_share(r)[0]) is not None and s + margin_mib <= vram_free_mib + cur_v]
-    if ram_free_mib is not None:
-        fits = [r for r in fits if ram_need_mib(r) - cur_r + ram_floor_mib <= ram_free_mib
-                and pinned_mib(r) <= max(ram_free_mib + cur_r - ram_floor_mib, 0)]
+    fits = [r for r in fits if fits_after_stop(r, current, vram_free_mib=vram_free_mib, ram_free_mib=ram_free_mib,
+                                               margin_mib=margin_mib, ram_floor_mib=ram_floor_mib)]
     return _best(fits, objective)
+
+
+def fits_after_stop(row: dict, current: dict, *, vram_free_mib: int | None, ram_free_mib: int | None,
+                    margin_mib: int = 300, ram_floor_mib: int = 6144) -> bool:
+    """Would `row` fit what stopping the `current` server leaves free, with the floors kept? The readings are taken
+    while the current server runs, so its own share comes back. Used for the restart's next row and the step-up."""
+    cur_v = vram_share(current)[0] or 0
+    cur_r = ram_need_mib(current)
+    if vram_free_mib is not None:
+        s = vram_share(row)[0]
+        if s is None or s + margin_mib > vram_free_mib + cur_v:
+            return False
+    if ram_free_mib is not None:
+        if ram_need_mib(row) - cur_r + ram_floor_mib > ram_free_mib:
+            return False
+        if pinned_mib(row) > max(ram_free_mib + cur_r - ram_floor_mib, 0):
+            return False
+    return True
 
 
 def to_config(row: dict) -> Config:

@@ -1,6 +1,7 @@
 """Offline tests of M1.3's serving side: the CPU thread sweep, live confirmation (keep-if-faster), the front proxy
-(one sequence, streaming pass-through, 503 with a reason, prefix reuse off), and the memory governor with supervised
-restart. No GPU and no llama-server: a fake engine, a fake upstream HTTP server, fake memory readings and a fake clock.
+(one sequence, streaming pass-through, 503 with a reason, prefix reuse off), and the memory governor (watch, restart
+on a measured slowdown, step-up, off). No GPU and no llama-server: a fake engine, a fake upstream HTTP server, fake
+memory readings and a fake clock.
 python -m pytest -q tests"""
 import contextlib
 import http.client
@@ -425,45 +426,112 @@ class Proxy(unittest.TestCase):
             self.assertEqual((code, json.loads(body)["error"]["reason"]), (503, "upstream_unavailable"))
 
 
+def answer(sess, tps, clock=None, t=None):
+    """One completed request at `tps` tok/s, as the proxy reports it to the supervisor (at clock time t)."""
+    if clock is not None and t is not None:
+        clock.t = t
+    sess.sup.record({"predicted_n": 64, "predicted_ms": 64000.0 / tps})
+
+
+def settle(sess, tps=40.0):
+    """The row's baseline: its first 8 answers."""
+    for _ in range(sess.sup.opt.baseline_n):
+        answer(sess, tps)
+
+
+def slow_down(sess, clock, times, tps=20.0):
+    """Slow answers at the given clock times, a governor reading after each."""
+    for t in times:
+        answer(sess, tps, clock, t)
+        sess.sup.tick()
+
+
 class Governor(unittest.TestCase):
-    def test_pause_then_resume(self):
+    # --- watch, the default ---
+
+    def test_watch_is_the_default_and_never_restarts(self):
+        self.assertEqual(serve.ServeOptions().governor, "watch")
+        with session() as (sess, eng, reading, clock, events, port):
+            settle(sess)
+            reading["vram_free_mib"] = 150                       # a competing program took VRAM
+            reading["ram_avail_mib"] = 1000                      # and RAM
+            for t in range(0, 200, 2):                           # long past every window, and slow throughout
+                answer(sess, 10.0, clock, t)
+                sess.sup.tick()
+            self.assertIsNone(sess.gate.paused)                  # VRAM and RAM only warn
+            self.assertEqual(call(port, "/completion", {"prompt": "x"})[0], 200)
+            self.assertEqual((len(eng.started), sess.sup.restarts, sess.sup.state), (1, 0, "serving"))
+            warns = [e for e in events if e.startswith("warning:")]
+            self.assertEqual(len(warns), 2)                      # one line per crossing, not one per reading
+            self.assertIn("VRAM free 150 MiB < 300 MiB floor", warns[0])
+            self.assertIn("RAM available 1000 MiB < 3200 MiB floor", warns[1])
+            self.assertTrue(all("live decode" in w and "never restarts" in w for w in warns))
+            reading["vram_free_mib"] = 2000
+            sess.sup.tick()
+            self.assertTrue(any(e.startswith("clear: vram") for e in events))
+
+    def test_watch_pauses_only_on_commit_headroom(self):
         with session() as (sess, eng, reading, clock, events, port):
             sess.sup.tick()
             self.assertIsNone(sess.gate.paused)
-            reading["vram_free_mib"] = 150                       # a competing program took VRAM
+            reading["commit_avail_mib"] = 3000                   # under the 4 GiB commit floor: the crash risk
             sess.sup.tick()
             code, _, body = call(port, "/completion", {"prompt": "x"})
             self.assertEqual((code, json.loads(body)["error"]["reason"]), (503, "memory_pressure"))
-            self.assertIn("VRAM free 150 MiB < 300 MiB floor", json.loads(body)["error"]["message"])
+            self.assertIn("commit headroom 3000 MiB < 4096 MiB floor", json.loads(body)["error"]["message"])
             self.assertEqual(call(port, "/health", method="GET")[0], 503)
-            clock.t = 5
-            reading["vram_free_mib"] = 900
+            for t in range(2, 120, 2):                           # it persists: still no restart in watch
+                clock.t = t
+                sess.sup.tick()
+            self.assertEqual(len(eng.started), 1)
+            reading["commit_avail_mib"] = 30000
             sess.sup.tick()
             self.assertIsNone(sess.gate.paused)
             self.assertEqual(call(port, "/completion", {"prompt": "x"})[0], 200)
-            self.assertEqual(len(eng.started), 1)                # no restart for a short dip
             self.assertTrue(any(e.startswith("pause:") for e in events) and any(e.startswith("resume") for e in events))
 
-    def test_persisting_pressure_restarts_smaller_then_gives_up(self):
-        with session(max_restarts=3) as (sess, eng, reading, clock, events, port):
+    def test_the_proxy_feeds_the_row_baseline(self):
+        with session(tps=34.0) as (sess, eng, *_ , port):             # the profile says 40 tok/s
+            for _ in range(8):
+                self.assertEqual(call(port, "/completion", {"prompt": "x"})[0], 200)
+            deadline = time.monotonic() + 5
+            while sess.sup.baseline is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertAlmostEqual(sess.sup.baseline, 34.0, places=1)    # its own first 8 answers, not the profile
+
+    # --- restart: opt-in, on a measured slowdown ---
+
+    def test_restart_mode_ignores_a_memory_crossing_without_slowdown(self):
+        with session(governor="restart") as (sess, eng, reading, clock, events, port):
+            settle(sess)
             reading["vram_free_mib"] = 150
-            sess.sup.tick()
-            clock.t = 11                                         # past persist_s: restart on the next smaller row
-            sess.sup.tick()
+            for t in range(0, 120, 2):                           # E53's finding: the server kept its speed
+                answer(sess, 39.0, clock, t)
+                sess.sup.tick()
+            self.assertEqual((len(eng.started), sess.sup.restarts), (1, 0))
+            self.assertIsNone(sess.gate.paused)
+
+    def test_restart_mode_restarts_on_sustained_slowdown_then_gives_up(self):
+        with session(governor="restart", max_restarts=3) as (sess, eng, reading, clock, events, port):
+            settle(sess)
+            reading["vram_free_mib"] = 150
+            slow_down(sess, clock, [1, 6])                       # 5 s of slowdown: not yet
+            self.assertEqual(len(eng.started), 1)
+            slow_down(sess, clock, [12])                         # 11 s, under 70% of the 40 tok/s baseline
             self.assertEqual([c.moe_cache_mib for c in eng.started], [3000, 2000])
             self.assertEqual((sess.sup.restarts, sess.sup.state, sess.gate.paused), (1, "serving", None))
             self.assertEqual(sess.live.profiled, 35.0)          # the live check now judges the new row
-            self.assertTrue(any("restart 1 of 3" in e and "cache 2000 MiB" in e for e in events))
+            self.assertIsNone(sess.sup.baseline)                 # and the trigger waits for the new row's baseline
+            self.assertTrue(any("restart 1 of 3" in e and "cache 2000 MiB" in e and "VRAM free 150" in e
+                                for e in events))
             self.assertEqual(call(port, "/completion", {"prompt": "x"})[0], 200)
-            clock.t = 20
-            sess.sup.tick()                                      # still short of VRAM: pause again...
-            clock.t = 31
-            sess.sup.tick()                                      # ...and one step further down
+            slow_down(sess, clock, [13, 14], tps=35.0)           # on the new row: no baseline yet, no trigger
+            self.assertEqual(len(eng.started), 2)
+            settle(sess, 35.0)
+            slow_down(sess, clock, [20, 31], tps=10.0)           # slow again: one step further down
             self.assertEqual(eng.started[-1].moe_cache_mib, 1000)
-            clock.t = 40
-            sess.sup.tick()
-            clock.t = 51
-            sess.sup.tick()                                      # nothing exact is smaller: give up, clearly
+            settle(sess, 30.0)
+            slow_down(sess, clock, [40, 51], tps=10.0)           # nothing exact is smaller: give up, clearly
             self.assertEqual(sess.sup.state, "gave_up")
             self.assertIn("no smaller measured configuration", sess.sup.reason)
             self.assertIn("--allow-non-exact", sess.sup.reason)
@@ -471,24 +539,135 @@ class Governor(unittest.TestCase):
             code, _, body = call(port, "/completion", {"prompt": "x"})
             self.assertEqual((code, json.loads(body)["error"]["reason"]), (503, "gave_up"))
 
-    def test_restart_limit(self):
-        with session(max_restarts=1, allow_non_exact=True) as (sess, eng, reading, clock, events, port):
+    def test_restart_mode_rides_out_a_brief_dip(self):
+        with session(governor="restart") as (sess, eng, reading, clock, events, port):
+            settle(sess)
             reading["vram_free_mib"] = 150
-            for t in (0, 11, 20, 31):
-                clock.t = t
-                sess.sup.tick()
+            slow_down(sess, clock, [1, 5])
+            slow_down(sess, clock, [8], tps=38.0)                # recovered before the window closed
+            slow_down(sess, clock, [12, 14])                     # a new dip starts the window again
+            self.assertEqual((len(eng.started), sess.sup.restarts), (1, 0))
+            self.assertTrue(any(e.startswith("decode recovered") for e in events))
+            clock.t = 40
+            sess.sup.tick()                                      # time alone is not evidence: no answers, no restart
+            self.assertEqual(len(eng.started), 1)
+
+    def test_restart_mode_needs_a_memory_crossing_to_restart(self):
+        with session(governor="restart") as (sess, eng, reading, clock, events, port):
+            settle(sess)
+            slow_down(sess, clock, [1, 6, 12])                   # slow, but every floor holds
+            self.assertEqual(len(eng.started), 1)
+            self.assertTrue(any("no memory floor was crossed" in e for e in events))
+
+    def test_restart_limit(self):
+        with session(governor="restart", max_restarts=1, allow_non_exact=True) as (sess, eng, reading, clock, events,
+                                                                                     port):
+            settle(sess)
+            reading["vram_free_mib"] = 150
+            slow_down(sess, clock, [0, 11])
+            self.assertEqual(sess.sup.restarts, 1)
+            settle(sess, 35.0)
+            slow_down(sess, clock, [20, 31], tps=10.0)
             self.assertEqual(sess.sup.state, "gave_up")
             self.assertIn("1 supervised restarts were already made (limit 1)", sess.sup.reason)
             self.assertEqual(len(eng.started), 2)
+
+    # --- step-up ---
+
+    def down_one(self, sess, reading, clock):
+        settle(sess)
+        reading["vram_free_mib"] = 150
+        slow_down(sess, clock, [0, 11])
+        self.assertEqual(sess.sup.row["moe_cache_mib"], 2000)
+
+    def test_step_up_after_sustained_recovery(self):
+        with session(governor="restart") as (sess, eng, reading, clock, events, port):
+            self.down_one(sess, reading, clock)
+            reading["vram_free_mib"] = 5000                      # the hog left: the planned row fits again
+            for t in (20, 50):
+                clock.t = t
+                sess.sup.tick()
+            reading["vram_free_mib"] = 150                       # back briefly: the window starts again
+            clock.t = 55
+            sess.sup.tick()
+            reading["vram_free_mib"] = 5000
+            for t in (60, 110):
+                clock.t = t
+                sess.sup.tick()
+            self.assertEqual(len(eng.started), 2)                # 50 s of the 60 s window: not yet
+            clock.t = 121
+            sess.sup.tick()
+            self.assertEqual([c.moe_cache_mib for c in eng.started], [3000, 2000, 3000])
+            self.assertEqual((sess.sup.restarts, sess.sup.state, sess.gate.paused), (2, "serving", None))
+            self.assertAlmostEqual(sess.sup.baseline, 40.0)      # the planned row keeps the baseline it had
+            self.assertEqual(sess.live.profiled, 40.0)
+            self.assertTrue(any(e.startswith("step up 2 of 3") for e in events))
+
+    def test_step_up_never_with_a_queue(self):
+        with session(governor="restart") as (sess, eng, reading, clock, events, port):
+            self.down_one(sess, reading, clock)
+            reading["vram_free_mib"] = 5000
+            with sess.gate.cond:
+                sess.gate.waiting = 1                            # a request is queued
+            for t in (20, 81, 90):
+                clock.t = t
+                sess.sup.tick()
+            self.assertEqual(len(eng.started), 2)
+            self.assertIsNone(sess.gate.paused)                  # the queued request was not turned away
+            with sess.gate.cond:
+                sess.gate.waiting = 0
+            clock.t = 92
+            sess.sup.tick()
+            self.assertEqual(eng.started[-1].moe_cache_mib, 3000)
+
+    def test_step_up_counts_against_max_restarts(self):
+        with session(governor="restart", max_restarts=1) as (sess, eng, reading, clock, events, port):
+            self.down_one(sess, reading, clock)
+            reading["vram_free_mib"] = 5000
+            for t in (20, 81, 90, 200):
+                clock.t = t
+                sess.sup.tick()
+            self.assertEqual((len(eng.started), sess.sup.state), (2, "serving"))   # stays, does not give up
+            self.assertEqual(sum("limit 1" in e for e in events), 1)               # and says so once
+
+    def test_watch_never_steps_anywhere(self):
+        with session() as (sess, eng, reading, clock, events, port):
+            sess.sup.row = ROWS[1]                               # as if it were on a smaller row
+            reading["vram_free_mib"] = 5000
+            for t in (0, 100, 200):
+                clock.t = t
+                sess.sup.tick()
+            self.assertEqual(len(eng.started), 1)
+
+    # --- off ---
+
+    def test_off_runs_no_governor_thread(self):
+        for mode, alive in (("off", False), ("watch", True)):
+            eng = FakeEngine()
+            events = []
+            o = serve.ServeOptions(port=0, internal_port=eng.port, need=3000, governor=mode, interval_s=60)
+            with tempfile.TemporaryDirectory() as d:
+                sess, why = serve.open_session(eng, Path("m.gguf"), ROWS, ROWS[0], o, Path(d) / "serve.log",
+                                               read=lambda: {}, say=events.append)
+                try:
+                    self.assertEqual(sess.gov.is_alive(), alive, mode)
+                    self.assertTrue(events[0].startswith(f"governor: {mode}"))
+                finally:
+                    sess.close()
+                    eng.up.close()
+
+    # --- unchanged ---
 
     def test_ram_floor_depends_on_pinning(self):
         f = serve.floors(ROWS[0], serve.ServeOptions(), 32000)
         self.assertEqual(f["ram_avail_mib"], 3200)              # max(2 GiB, 10% of RAM) for a row that pins nothing
         tier = dict(ROWS[0], miss_source="tier", tier_mib=4096)
         self.assertEqual(serve.floors(tier, serve.ServeOptions(), 32000)["ram_avail_mib"], 6144)
-        kinds, detail = serve.pressure({"vram_free_mib": 2000, "ram_avail_mib": 3000, "commit_avail_mib": 3000}, f)
+        r = {"vram_free_mib": 2000, "ram_avail_mib": 3000, "commit_avail_mib": 3000}
+        kinds, detail = serve.pressure(r, f)
         self.assertEqual(kinds, {"ram"})
         self.assertIn("commit headroom 3000 MiB", detail)
+        self.assertEqual(set(serve.crossings(r, f)), {"ram", "commit"})
 
     def test_a_server_that_exits_is_restarted_on_the_same_row(self):
         with session() as (sess, eng, reading, clock, events, port):
@@ -531,6 +710,7 @@ class ServeCli(unittest.TestCase):
         args = doc["server_args"]
         self.assertEqual(args[args.index("--port") + 1], "9001")
         self.assertIn("--no-cache-prompt", args)
+        self.assertEqual(doc["governor"], "watch")                # the default since register E53
 
     def test_confirm_records_the_ab_in_the_profile(self):
         class Live(FakeLlama):
