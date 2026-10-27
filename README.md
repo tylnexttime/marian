@@ -4,7 +4,8 @@
 
 Marian is named after a popular Polish given name. Status: **pre-release**; M1.1 and M1.2 measured (24/10/2026),
 M1.3's calibration v1 built in Python (27/10/2026: calibration gate, cache arms, CPU thread sweep, live confirmation,
-and serving through a front proxy with a memory governor), tested offline and run on one machine only. The full
+and serving through a front proxy with a memory governor), tested offline and run on one machine only; the first
+prefill patches (0007-0009) measured the same day (register E51, E54). The full
 story, every measured table and the mistakes are in [docs/JOURNEY.md](docs/JOURNEY.md).
 
 ## What it does
@@ -56,9 +57,12 @@ These are why a measuring tool matters. Sources and conditions for every figure 
   12 tok/s target). Against stock llama.cpp's best layer offload for the same model (`-ncmoe 34`) that is about
   **1.5x faster warm and 3.4x faster after a long prompt**, in 5 of 5 rounds. The answers are identical to the
   all-in-VRAM reference down to every recorded log-probability (Gemma 4 26B, all three miss sources), which stock
-  offload is not. The price: **prefill 4-5x slower than stock** (about 3x slower than upstream's cache path),
-  because prefill still reads through the memory map and the pinned tier takes the page cache it needs (see
-  Limitations).
+  offload is not. The price, in the default configuration: **prefill 4-5x slower than stock** (about 3x slower
+  than upstream's cache path), because prefill reads through the memory map and the pinned tier takes the page cache
+  it needs. Two opt-in, exact changes measured on 27/10/2026 close that gap on this laptop: prefill misses through P3
+  (16K prefill 35 -> 61 tok/s) and, on top of it, a declared ubatch of 2048 (157 tok/s at 16K, against 142 for stock
+  at its default ubatch in the same session). Decode in that session ran 16-18% under the earlier session's figures,
+  and the cause is not yet separated (see Limitations).
 - **The practical question we were asked** (can that 8 GB / 32 GB laptop, with most of its RAM in use, run a 4-30B
   model at 20 to 30 tok/s?) **was answered yes by stock llama.cpp with good offload settings, not by Marian's cache**:
   Gemma 4 26B-A4B at IQ3_XXS with `-ncmoe 18` ran at 26.3 tok/s, and small dense models that fit in VRAM ran at
@@ -77,6 +81,8 @@ These are why a measuring tool matters. Sources and conditions for every figure 
  |    P0/P0b trace   per-step hits, fills, bytes, host time, expert ids               |
  |    exactness floor  every expert group keeps enough slots for the largest step     |
  |    P3 miss source   unbuffered reads -> pinned staging ring -> pinned RAM tier     |
+ |    tier safety      the pinned tier capped, and pinned in chunks of at most 1 GiB  |
+ |    P3 prefill       large-batch misses from the same ring and tier (opt-in)        |
  +------------------------------------------------------------------------------------+
  |  upstream llama.cpp at 63b4b303: --moe-cache-mib per-expert VRAM cache (SLRU),     |
  |  MUL_MAT_ID on the cache bank, selective expert copy for large batches             |
@@ -86,17 +92,22 @@ These are why a measuring tool matters. Sources and conditions for every figure 
 | Part | Whose | State |
 |---|---|---|
 | Per-expert VRAM cache, SLRU policy, every expert computed on the GPU | upstream llama.cpp (PRs #29887, #30112, #30637) | used as the base |
-| Selective expert copy for large batches | upstream (PR #29943) | used as is; P3 does not cover it yet |
+| Selective expert copy for large batches | upstream (PR #29943) | used as is by default; patch 0008 serves its misses from P3 when asked (`--moe-prefill-source p3`) |
 | M0: profiler, planner, launcher | Marian | done |
 | P0 / P0b trace (`MARIAN_MOE_TRACE`, `MARIAN_MOE_TRACE_FILLS`) | Marian | built, used in every M1 run |
 | Exactness floor (per-group slot floor, refusal below it) | Marian | built, passed its test |
 | P3 miss source (`--moe-miss-source mmap\|ring\|tier`, `--moe-tier-mib`, `--moe-ring-mib`) | Marian | built, measured, opt-in (default stays `mmap`) |
+| Tier safety (patch 0007): the tier is capped at min(request, 50% of physical RAM, commit room minus 4 GiB), pinned in chunks of at most 1 GiB, and stops growing at a chunk that cannot be pinned; one log line says what was pinned | Marian | built 27/10/2026, in the default build; no measured cost (register E51). The cap and the failed-chunk branch have never triggered, so they are untested |
+| Prefill misses through P3 (patch 0008): batches above 32 tokens take each missed expert from its tier slot, else by unbuffered reads through the pinned ring, never by a memory-map fault | Marian | built 27/10/2026, exact (E51, E54). Swift with the 6 GiB tier: 16K prefill 34.7 -> 61.1 tok/s (+76%, three rounds). Slower than the memory map when the model fits in the page cache (Gemma 4 26B, a 5,428-token prompt: 260 against 573 tok/s, one run each) |
+| Prefill source switch (patch 0009): `--moe-prefill-source mmap\|p3` | Marian | built 27/10/2026. Default `mmap`: upstream's uploads, byte for byte. `p3` turns 0008's path on and is refused without a ring or tier miss source |
 | Calibration v1, Python side (M1.3): cache arms in the profiler (VRAM cliff finder, ring and tier ladder inside a RAM envelope), exact-class per row, calibration gate, launch checks, `serve --stock` rollback, `marian diag` | Marian | built, offline tests pass; one smoke run on one machine |
 | Calibration v1, serving side (M1.3): CPU thread sweep, live check and `serve --confirm` (keep-if-faster A/B), front proxy (one sequence, 503 with a reason, streaming pass-through), memory governor (watch by default; restart on a measured slowdown, opt-in), prompt-prefix reuse off by default (register test E52) | Marian | built 27/10/2026, offline tests pass (fake engine and server); see Limitations for what has run live |
 | Learned counts (rest of M1.3); ranked core, warm start, TinyLFU doorkeeper in VRAM (P2), drain removal, prefetch | Marian | designed, not built |
 
-The patches are in [docs/m1.0/patches](docs/m1.0/patches) (P0) and [docs/m1.1/patches](docs/m1.1/patches) (0001
-exactness floor, 0002 fill trace, 0003 P3 minimal), as `git format-patch` files on top of `63b4b303`.
+The patches are in [docs/m1.0/patches](docs/m1.0/patches) (P0), [docs/m1.1/patches](docs/m1.1/patches) (0001
+exactness floor, 0002 fill trace, 0003 P3 minimal), [docs/m1.2/patches](docs/m1.2/patches) (0004 routing-id trace,
+0005 its review fixes) and [docs/m1.3/patches](docs/m1.3/patches) (0007 tier safety, 0008 prefill source, 0009 the
+prefill-source switch), as `git format-patch` files on top of `63b4b303`, applied in that order. There is no 0006.
 
 ## Inspirations and prior art
 
@@ -167,11 +178,34 @@ Be warned; this is research code.
   C-17), and the desktop's own display memory made it harsher than a real 8 GB card.
 - **Few rounds.** Most arms ran twice (some once); only the tier-against-stock comparison has the five interleaved
   rounds the design asks for. Treat other differences under about 10% as noise.
-- **The tier costs prefill 4-5x against stock (about 3x against upstream's cache).** P3 serves decode misses only:
-  prefill batches above 32 tokens still go through
-  upstream's selective copy, which faults through the memory map, and the 6 GiB pinned tier takes the page cache
-  that path needs. 16K-token prefill fell from about 112-119 tok/s to 34-36 tok/s (4K: about 47-53 to 23-26). The
-  ring costs less (16K: 105-110). This is why neither is a default.
+- **By default the tier still costs prefill 4-5x against stock (about 3x against upstream's cache).** With
+  `--moe-prefill-source mmap` (the default), prefill batches above 32 tokens go through upstream's selective copy,
+  which faults through the memory map, and the 6 GiB pinned tier takes the page cache that path needs. 16K-token
+  prefill fell from about 112-119 tok/s to 34-36 tok/s (4K: about 47-53 to 23-26). The ring costs less (16K:
+  105-110). This is why neither is a default.
+- **Prefill through P3 helps, but is opt-in and drive-bound.** With `--moe-prefill-source p3` (patches 0008 and
+  0009), Swift's 16K prefill with the tier rose from 34.7 to 61.1 tok/s (median of three interleaved rounds, register
+  E51), short of the 2x the test asked for. Decode did not suffer (15.15 against 14.80 tok/s warm, 14.07 against
+  13.17 after a 16K prompt), and the answers are unchanged: Swift's cache arms agree with each other, and Gemma 4
+  26B's tier arm matches all-VRAM on every top-3 log-probability. It is still 0.35x stock (174.2 tok/s in the same
+  rounds). Each 512-token ubatch re-reads most of each layer's experts: a 16K prompt uploads 509 GiB, the tier holds
+  13.8% of it, and the rest comes off the SSD at about 1.95 GB/s. It stays opt-in because it is slower when the
+  model fits in the page cache: Gemma 4 26B's 5,428-token prompt ran at 573 tok/s with the memory map and 260 with
+  P3 (one run each). Calibration is meant to measure both and keep the faster; the Python side does not do that
+  yet.
+- **A larger ubatch is exact against a reference at the same ubatch, and is a declared setting.** A ubatch changes
+  the compute shape, so all-VRAM at `-ub 2048` and all-VRAM at the default 512 give different answers (Gemma 4 26B,
+  ten prompts of 2,009-2,406 tokens: log-probabilities moved by up to 0.668, and 7 of 10 texts differed). At
+  `-ub 2048 -b 2048`, the cache arm with memory-mapped misses and the tier arm with P3 prefill both matched all-VRAM
+  at the same ubatch exactly (register E54). So, like the context size, the ubatch is part of the reference: a
+  deployment that declares 2048 gets answers identical to an all-VRAM run at 2048, not to one at 512. Speed on Swift
+  with the tier and P3 prefill (three rounds): 16K prefill 156.7 tok/s against stock's 142.4 at its default ubatch,
+  4K prefill 138.3 against 97.1, decode 12.67 against 10.57, and 11.47 against 4.61 after a 16K prompt. Decode was
+  16-18% under the earlier session's figures (15.15 and 14.07), which failed that test's decode bound. That
+  comparison crosses sessions: stock ran about 10% slower in the same session, the hit rate was unchanged, and the
+  2,048-row compute buffer takes about 300 MiB more VRAM. Until a same-session run at 512 settles it, the default
+  stays at 512. The ubatch is to become a declared profile parameter; the Python side does not carry it yet. Stock at
+  `-ub 2048` reached 279.6 tok/s at 16K (one run), but stock changes answers.
 - **The pinned tier competes with the desktop.** It takes RAM the OS and other programs cannot page; pinning can fail
   (it then falls back to pageable memory and says so).
 - **The decode target is met on one machine, one model, one prompt set.** Five interleaved rounds (design 9.3) put
@@ -225,7 +259,7 @@ Be warned; this is research code.
   rebased fork.
 - **Prompt-prefix reuse changes answers, so it is off in exact mode.** Register test E52 (27/10/2026) asked
   whether an answer computed on a reused prompt prefix equals the answer computed fresh.
-  - **The test:** Gemma 4 26B-A4B IQ4_XS on the rebased build, with a 1,616-token instruction block and ten
+  - **The test:** Gemma 4 26B-A4B IQ4_XS on the rebased build, with a 1,608-token instruction block (1,616 with the chat template) and ten
     documents.
   - **The result:** none of the 10 reused answers matched its fresh twin, either all-VRAM or with the cache and
     tier; log-probabilities moved by 1.08-4.66, and 5 of 10 differed in tokens. A fresh prompt run twice matched
@@ -243,7 +277,8 @@ Be warned; this is research code.
 | M1.0 | measured, 22-24/10/2026 | upstream cache vs stock on Swift 1.5 IQ2_XS; copy probe; 8 GB floor arms; gate and control models |
 | M1.1 | in progress | exactness floor PASS; trace-replay probe GO; P3 verify run PASS (11/11); P3 server arms measured 24/10/2026 (two rounds): the tier doubles decode, exact, but costs prefill about 3x; controls and the Maya drive test done; replay = server exactly (+0.00 points, the M1.1 exit check); five-round confirmation: decode exit met (E44); log-probability exactness against all-VRAM (E45) |
 | M1.2 | tooling done, policy deprioritised | the routing-id trace and the exact replay (A19); the ranked policy lost to upstream's SLRU on the real trace ([JOURNEY section 7](docs/JOURNEY.md#7-what-is-next)) |
-| M1.3 | Python side built, 27/10/2026 | `marian calibrate`, cache arms (cliff finder, miss sources, RAM envelope), calibration gate, launch checks, `serve --stock`, `--exact-only`, `marian diag`; 26 new offline tests, and the whole offline suite passes. One GPU smoke on the reference laptop (27/10/2026, the M1.2 build at the old pin: Gemma 4 26B-A4B IQ3_XXS, context 4096, 218 s): the gate refused before calibration, the walk, two cache budgets, the ring and two tier sizes ran, `plan`, `serve --dry-run` and `serve --stock --dry-run` passed. Serving side built the same day: CPU thread sweep, live check and `serve --confirm`, front proxy (one sequence, 503 with a reason, streaming), memory governor with supervised restart, prompt-prefix reuse off by default; 30 more offline tests (the whole suite: 118). Register test E52 (prefix-reuse exactness): registered run not yet made (GPU held by another test); its instrument check found reused answers differing from fresh ones. Not built: learned counts |
+| M1.3 | Python side built, 27/10/2026 | `marian calibrate`, cache arms (cliff finder, miss sources, RAM envelope), calibration gate, launch checks, `serve --stock`, `--exact-only`, `marian diag`; 26 new offline tests, and the whole offline suite passes. One GPU smoke on the reference laptop (27/10/2026, the M1.2 build at the old pin: Gemma 4 26B-A4B IQ3_XXS, context 4096, 218 s): the gate refused before calibration, the walk, two cache budgets, the ring and two tier sizes ran, `plan`, `serve --dry-run` and `serve --stock --dry-run` passed. Serving side built the same day: CPU thread sweep, live check and `serve --confirm`, front proxy (one sequence, 503 with a reason, streaming), memory governor with supervised restart, prompt-prefix reuse off by default; 30 more offline tests (the whole suite: 118). Register test E52: prefix reuse is not exact (0 of 10 reused answers matched), so it stays off in exact mode. **The M1.3 exit is not met:** in E53 the governor kept every answer exact across two restarts, but restarting on a memory reading cost more than the pressure did, so its default is now `watch` and `restart` (on a measured slowdown, with a step-up) is opt-in and has run offline only. The fork's pinning rules: chunked pinning and the RAM cap are in patch 0007; the cap has never triggered. Not built: learned counts |
+| Prefill track | first patches measured, 27/10/2026 | patch 0008 (prefill misses through P3, opt-in via 0009's `--moe-prefill-source p3`): +76% at 16K with the tier, exact (E51). A declared ubatch of 2048 is exact against all-VRAM at the same ubatch and, with P3 prefill, beat stock's default prefill at 16K (156.7 against 142.4 tok/s, three rounds); its decode was 16-18% under the earlier session's, cause not yet separated (E54). Defaults unchanged: `mmap` and ubatch 512 |
 | M1.4 onwards | not started | real-hardware validation (see [DESIGN-M1 section 10](docs/design/DESIGN-M1.md)) |
 
 **M1 exit criteria, and where each stands** (reference laptop, Swift 1.5 IQ2_XS):
@@ -390,9 +425,10 @@ template.
 
 The living roadmap, with the evidence behind each item and the dev debt, is
 [docs/ROADMAP.md](docs/ROADMAP.md) (updated 27/10/2026 from scans of upstream llama.cpp and the wider ecosystem). In
-short: rebase onto current upstream; make prefill the main target (Swift's 26.8 GiB per-layer embedding table shares
-the page cache with the experts, and prefill misses still fault through the memory map); calibration v1 with Windows
-pinning and RAM-safety rules; then the 8 GB laptop under RAM pressure. The milestones from
+short: rebase onto current upstream (done); make prefill the main target (expert page faults were the cost, not
+Swift's embedding table; prefill misses can now come from P3, opt-in, and a declared ubatch of 2048 reached stock's
+prefill exactly; next, fewer bytes per prompt); calibration v1 with Windows pinning and RAM-safety rules; then the
+8 GB laptop under RAM pressure. The milestones from
 [DESIGN-M1 section 10](docs/design/DESIGN-M1.md), reshaped by what M1.0 measured:
 
 - **M1.2:** a ranked policy (ranked core, warm start, doorkeeper, transient slots, budgets by need), with a bitwise
@@ -400,8 +436,8 @@ pinning and RAM-safety rules; then the 8 GB laptop under RAM pressure. The miles
 - **M1.3:** calibration v1. Built (Python): the VRAM cliff finder, miss sources in a RAM safety envelope, the CPU
   thread sweep, the plan, the calibration gate, launch checks, the `--stock` rollback, the diagnostics bundle, live
   confirmation, and serving through a proxy with a memory governor (watch by default since register E53). Still to
-  do: learned counts, a live run of the governor's `restart` mode, and the Windows pinning rules
-  (pin in chunks, all-or-none tier copy) in the fork.
+  do: learned counts, a live run of the governor's `restart` mode, a test that makes 0007's tier cap trigger, and
+  calibration rows for the prefill source and a declared ubatch.
 - **M1.4:** real hardware: a real 8 GB GPU, Linux, a slower link and drive.
 - **M2:** the full expert source (prefill included), removing the per-layer drain, look-ahead prefetch.
 - **M3 to M5:** verified speculation, opt-in answer-changing switches with blind quality gates, and prefill work.

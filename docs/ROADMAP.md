@@ -1,7 +1,8 @@
 # Marian roadmap
 
 A living document: what we build next, why, and what evidence put it there. Updated 27/10/2026 after a scan of
-upstream llama.cpp and of the wider ecosystem (other engines and 2025-2026 papers). Milestone numbers follow
+upstream llama.cpp and of the wider ecosystem (other engines and 2025-2026 papers), and again the same afternoon
+after register tests E51-E54. Milestone numbers follow
 [DESIGN-M1 section 10](design/DESIGN-M1.md); this page reorders them by what we have measured since.
 
 Every item names its class, as in the design: **E** exact (answers cannot change), **D** verified speculation (the
@@ -11,8 +12,12 @@ gate). Evidence marked *theirs* comes from another project's own machine and has
 ## Where we stand
 
 - **Decode is solved on the reference laptop:** the P3 pinned tier meets the M1 exit, exactly (README, JOURNEY A21-A22).
-- **Prefill is the obstacle.** With the tier, a 16K prompt runs 4-5x slower than stock. Large batches still fault
-  experts through the memory map, and the pinned tier takes the page cache they need.
+- **Prefill was the obstacle, and is now closed on this laptop by two opt-in, exact changes (E51, E54).** In the
+  default configuration a 16K prompt with the tier still runs 4-5x slower than stock: large batches fault experts
+  through the memory map, and the pinned tier takes the page cache they need. With P3 prefill
+  (`--moe-prefill-source p3`) it runs 61 tok/s instead of 35; with a declared ubatch of 2048 on top, 157 tok/s,
+  against 142 for stock at its default ubatch in the same session. Decode in that session ran 16-18% under the
+  earlier one, and whether the ubatch causes it is not yet known.
 - **Where the prefill time goes (E49, 27/10/2026): expert page faults, not the embedding table.**
   - **The suspect:** Swift's per-layer embedding table is 26.8 GiB, beside 33.0 GiB of experts on a 32 GB machine.
   - **Measured with `wsprobe`** (tools/wsprobe, no admin needed): the table held at most 0.48 GiB of the server's
@@ -21,7 +26,8 @@ gate). Evidence marked *theirs* comes from another project's own machine and has
   - **What does hurt:** with the 6 GiB tier, prefill runs about 38,700 single-page disk reads per second, which is
     expert pages faulting in under memory pressure. That makes the P3 prefill source below the first fix.
 - **The use case that drives the work:** a PII/sensitivity gate on 4-30B models, on an 8 GB GPU beside a desktop that
-  uses most of 32 GB. Prefill matters as much as decode there, and today stock offload wins that case.
+  uses most of 32 GB. Prefill matters as much as decode there, and today stock offload wins that case (not yet
+  re-measured with the prefill patches; that is E50).
 
 ## Next, in order
 
@@ -37,10 +43,21 @@ before the build.
 | Item | Class | Why | Evidence | Effort |
 |---|---|---|---|---|
 | ~~Measure first: residency by tensor kind~~ **done (E49)**: the embedding table is ruled out; expert page faults are the cost | test | | `wsprobe` | done |
-| **Prefill misses through P3** (patches 0007 + 0008, test E51, in progress): route the large-batch selective copy through the unbuffered ring and tier, not memory-map faults; pin the tier in chunks under a RAM cap | E | P3 serves decode only today; E49 measured about 38,700 4 KiB faults per second during the tier's prefill | our E40/E44/E49 | M |
+| ~~Prefill misses through P3~~ **done (E51), shipped opt-in**: patch 0008 routes the large-batch selective copy through the tier and the unbuffered ring, never memory-map faults; patch 0009 adds `--moe-prefill-source mmap\|p3`, default `mmap` (upstream's path, byte for byte); patch 0007 pins the tier in chunks under a RAM cap | E | 16K prefill with the tier +76% (34.7 -> 61.1 tok/s, three rounds), decode unchanged or better, exact (Gemma's tier arm identical to all-VRAM; Swift's cache arms identical to each other). Short of the registered 2x, and 0.35x stock: drive-bound. Opt-in because it is slower when the model fits in the page cache (Gemma 4 26B, 5,428-token prompt: 260 against 573 tok/s, one run each) | our E51 | done |
+| ~~Is a larger ubatch exact?~~ **done (E54): a declared ubatch is class E against a reference at the same ubatch** | E, declared | At `-ub 2048 -b 2048` the memory-mapped cache arm and the tier arm with P3 prefill match all-VRAM at 2048 on ten 2,009-2,406-token prompts, while all-VRAM at 512 differs from all-VRAM at 2048. With the tier and P3 prefill, Swift's 16K prefill is 156.7 tok/s against stock's 142.4 at its default ubatch, exactly. Ships as a declared profile parameter, default 512: calibration measures prefill and decode at the declared value and reports the trade (Python side not built) | our E54 | done; calibration rows S |
+| **Same-session decode check: T8 at ubatch 512 against 2048** | test | E54's decode was 16-18% under E51's (12.67 against 15.15 warm, 11.47 against 14.07 after 16K), but the comparison crossed sessions: stock also ran about 10% slower, the hit rate was unchanged (0.906), host time per token rose, and E51's one `-ub 2048` run decoded at 14.9. Before any claim that the cost is intrinsic | our E51, E54 | S |
+| **Compute-buffer sizing for a large ubatch** | E | The 2,048-row compute buffer took about 300 MiB more VRAM beside an unchanged 9,400 MiB cache (peak 15,294 against 14,992 MiB). Size it for the large batch without shrinking the cache's share | our E54 | S-M |
 | **Prefill expert prefetch**: read layer l+1's experts while layer l computes | E | The fault stalls are serial today | ik_llama.cpp #2101, #2667: 1.9-2.7x on models larger than RAM (*theirs*, Linux) | M |
 | **Pin mapped expert ranges** (upstream #31122, closed by a bot, not on merit) as a measured arm | E | Prompt speed +27-44% (*theirs*) | upstream PR #31122 | S |
-| **Layer-major chunked prefill**, then refill the cache with the prompt's hottest experts | E at a fixed ubatch | Moves M5 forward: a 12 GB card prefilled 231 tok/s at 8K this way | Strata v0.2.4; MoE-CORE (arXiv 2610.01950); Maya #352 (*theirs*) | L |
+| **Layer-major chunked prefill**, then refill the cache with the prompt's hottest experts | E at a fixed ubatch | Moves M5 forward: a 12 GB card prefilled 231 tok/s at 8K this way. **Note after E51:** the next lever is fewer bytes per prompt, not a faster source. At the default ubatch a 16K prompt uploads 509 GiB of experts, because each 512-token ubatch re-reads most of each layer's experts; the point of layer-major prefill is to read them once per larger chunk | Strata v0.2.4; MoE-CORE (arXiv 2610.01950); Maya #352 (*theirs*); our E51 | L |
+
+**A correction.** On the morning of 27/10 we classed a larger ubatch as A "until shown otherwise", because it
+changes the compute shape (one of that day's logged decisions; E51 reported its `-ub 2048` arm that way, as its text differed
+from the default ubatch's). That compared two different references. Marian's exactness claim is against an all-VRAM
+run with the same settings, as for the context size, and DESIGN-M1 already said "E at a fixed `n_ubatch`". E54
+measured it that way: a larger ubatch is class E relative to a reference at the same ubatch. It is a declared
+setting, not an answer-changing switch, and a deployment that declares it gets the all-VRAM answers at that ubatch,
+not at 512.
 
 ### 3. Calibration v1 (M1.3): built in Python 27/10/2026 except learned counts; tested offline; one machine
 
@@ -70,7 +87,7 @@ Built from the design, plus safety and method rules other projects paid for:
 - **Fixed-prefix KV reuse for the gate: measured, NOT exact, so class A** (register E52, 27/10/2026).
   - **Why it was tried:** a gate re-reads the same instructions every time. Strata v0.2.3 reused 91% of a shared
     prompt (*theirs*).
-  - **The test:** Gemma 4 26B-A4B IQ4_XS, a 1,616-token instruction block plus ten documents.
+  - **The test:** Gemma 4 26B-A4B IQ4_XS, a 1,608-token instruction block (1,616 with the chat template) plus ten documents.
   - **The result:**
     - Reused answers matched their fresh twins in 0 of 10 pairs, both all-VRAM and with the cache and tier;
       log-probabilities moved by 1.08-4.66.
@@ -83,11 +100,17 @@ Built from the design, plus safety and method rules other projects paid for:
 
 Still to build:
 
-- **Pin in chunks under a cap** (E, in the fork). On Windows the driver limits pinned memory per allocation and per
-  process; a one-shot pin fails and silently falls back to pageable memory. *Theirs*: ik #2604 (10.3 vs 3.6 GB/s),
-  Maya #417.
-- **Cap the tier at about half of RAM, and copy all-or-none with a commit-room check** (E, in the fork). *Theirs*:
-  upstream #31122's Windows note, Maya v1.1.27, Strata v0.2.6. This means re-testing our partial 6 GiB tier.
+- ~~Pin in chunks under a cap~~ **built in the fork, patch 0007 (27/10), in the default build.** On Windows the
+  driver limits pinned memory per allocation and per process; a one-shot pin fails and silently falls back to
+  pageable memory. *Theirs*: ik #2604 (10.3 vs 3.6 GB/s), Maya #417. 0007 pins in chunks of at most 1 GiB and stops
+  growing at a chunk that cannot be pinned, keeping what is pinned (not all-or-none). It caps the tier at
+  min(request, 50% of physical RAM, commit room minus 4 GiB), after upstream #31122's Windows note, Maya v1.1.27 and
+  Strata v0.2.6. No measured cost (E51), but in E51 and E54 every request sat below the cap and no chunk failed, so
+  the cap and the failed-chunk branch are untested (dev debt 14).
+- **Calibration rows for prefill** (decided after E51 and E54, not built): on ring and tier rows, measure
+  `--moe-prefill-source mmap` and `p3` and keep the faster; when a deployment declares a ubatch, measure prefill and
+  decode at that value and report the trade. The default ubatch stays 512, and calibration raises it only when the
+  deployment declares it.
 - Learned counts (P4), and a system-wide VRAM reading for the governor. The design asked for the DXGI budget, but a
   live read (27/10) showed `QueryVideoMemoryInfo` reports only the calling process's budget and usage: with another
   process holding 15 GB it still read 15,280 MiB free, against `nvidia-smi`'s 1,090. So the governor keeps
@@ -106,6 +129,9 @@ on decode in 4 of the 5 rounds.
   own rows, but they cannot pass this milestone.
 - **If Marian loses,** its planner choosing stock on that machine is the right behaviour, and is reported as such.
 - IQ3_XXS is reported too, not judged: today's fastest gate configuration across quants.
+- **A declared-ubatch row is reported beside it** (decided with E54); the rule stays as written. With a long prompt
+  and a short answer, a declared `-ub 2048` row with P3 prefill is the likely contender: on the 16 GB laptop it beat
+  default stock on prefill and decode, exactly.
 
 ### 5. M1.2, reshaped: evaluation and exactness rather than a new VRAM policy
 
@@ -163,7 +189,7 @@ gate should use a model whose licence fits the deploying organisation.
 |---|---|---|
 | 1 | 107 commits behind upstream | **done 27/10**: rebased onto `63b4b303`, E48 passed (exact, decode exit met) |
 | 2 | M0 drops the cache budget when it launches a plan | **done 27/10**: plans restore cache budget, miss source and tier |
-| 3 | Prefill 4-5x behind stock with the tier | prefill track above |
+| 3 | Prefill 4-5x behind stock with the tier | **paid down 27/10, opt-in:** P3 prefill +76% at 16K, exact (E51); with a declared ubatch of 2048, 156.7 tok/s against stock's 142.4 at its default ubatch, exact against all-VRAM at 2048 (E54). The defaults (`mmap`, ubatch 512) are unchanged, so a default tier row is still 4-5x behind; prefill track above |
 | 4 | Exactness proved at top-3 log-probability, not full logits; no E0 harness or parity matrix | M1.2 above |
 | 5 | Most arms ran one or two rounds | five rounds only for the decode exit; repeat any result that changes a default |
 | 6 | The build has no C++ exception unwinding (`/EHsc` off) | to fix with the rebase build |
@@ -174,3 +200,6 @@ gate should use a model whose licence fits the deploying organisation.
 | 11 | Governor, `--confirm` and thread sweep tested offline only | governor run live once (E53, 27/10): restarting on a memory reading did harm, so the default is now `watch`; `--governor restart` (slowdown trigger, step-up), `--confirm` and the thread sweep are still offline only |
 | 12 | Serve's request loop decodes 10-16% under calibrate's figure for the same row on a clean machine (E53) | not investigated; the live check now says "below profile", and the restart trigger uses the row's own measured baseline, not the profile |
 | 13 | E53's paging-cliff scenario (a model loaded beyond VRAM) was not reproduced by pressure on a running server | a launch-time event, guarded by the launch checks against the VRAM and RAM free at launch; the governor does not cover it |
+| 14 | 0007's cap branch never triggered | in E51 and E54 every tier request (4,096 and 6,144 MiB) sat below both limits and no chunk failed, so the cap and the stop-at-a-failed-chunk branch have never run on the GPU; the Linux branch has only been compiled. Needs a planted test: a request above the cap, and a forced failed chunk |
+| 15 | E54's decode figures were judged against E51's, from another session | open: E54's decode was 16-18% under E51's while stock also ran about 10% slower; a same-session run of T8 at ubatch 512 against 2048 comes before any claim about the ubatch's decode cost (prefill track above) |
+| 16 | E53's (d) clause was mis-specified: an absolute threshold (shared GPU memory at most 256 MiB) with no baseline | every all-VRAM llama-server read about 854 MiB of shared GPU memory from model load, on a quiet machine, so (d) could not pass and its "could not fail" escape could not trigger. The FAIL stands as written. E55, to be registered before any rerun, defines (d) as a rise above the arm's own P0 baseline, and says that definition was written after seeing E53's data |
