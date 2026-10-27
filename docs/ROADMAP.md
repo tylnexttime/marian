@@ -2,7 +2,7 @@
 
 A living document: what we build next, why, and what evidence put it there. Updated 27/10/2026 after a scan of
 upstream llama.cpp and of the wider ecosystem (other engines and 2025-2026 papers), and again the same afternoon
-after register tests E51-E54. Milestone numbers follow
+after register tests E51-E54 (the Python side of their two settings was built that evening, tested offline). Milestone numbers follow
 [DESIGN-M1 section 10](design/DESIGN-M1.md); this page reorders them by what we have measured since.
 
 Every item names its class, as in the design: **E** exact (answers cannot change), **D** verified speculation (the
@@ -44,7 +44,7 @@ before the build.
 |---|---|---|---|---|
 | ~~Measure first: residency by tensor kind~~ **done (E49)**: the embedding table is ruled out; expert page faults are the cost | test | | `wsprobe` | done |
 | ~~Prefill misses through P3~~ **done (E51), shipped opt-in**: patch 0008 routes the large-batch selective copy through the tier and the unbuffered ring, never memory-map faults; patch 0009 adds `--moe-prefill-source mmap\|p3`, default `mmap` (upstream's path, byte for byte); patch 0007 pins the tier in chunks under a RAM cap | E | 16K prefill with the tier +76% (34.7 -> 61.1 tok/s, three rounds), decode unchanged or better, exact (Gemma's tier arm identical to all-VRAM; Swift's cache arms identical to each other). Short of the registered 2x, and 0.35x stock: drive-bound. Opt-in because it is slower when the model fits in the page cache (Gemma 4 26B, 5,428-token prompt: 260 against 573 tok/s, one run each) | our E51 | done |
-| ~~Is a larger ubatch exact?~~ **done (E54): a declared ubatch is class E against a reference at the same ubatch** | E, declared | At `-ub 2048 -b 2048` the memory-mapped cache arm and the tier arm with P3 prefill match all-VRAM at 2048 on ten 2,009-2,406-token prompts, while all-VRAM at 512 differs from all-VRAM at 2048. With the tier and P3 prefill, Swift's 16K prefill is 156.7 tok/s against stock's 142.4 at its default ubatch, exactly. Ships as a declared profile parameter, default 512: calibration measures prefill and decode at the declared value and reports the trade (Python side not built) | our E54 | done; calibration rows S |
+| ~~Is a larger ubatch exact?~~ **done (E54): a declared ubatch is class E against a reference at the same ubatch** | E, declared | At `-ub 2048 -b 2048` the memory-mapped cache arm and the tier arm with P3 prefill match all-VRAM at 2048 on ten 2,009-2,406-token prompts, while all-VRAM at 512 differs from all-VRAM at 2048. With the tier and P3 prefill, Swift's 16K prefill is 156.7 tok/s against stock's 142.4 at its default ubatch, exactly. Ships as a declared profile parameter, default 512: calibration measures prefill and decode at the declared value and reports the trade. **Python side built 27/10** (offline tests only): `calibrate --ubatch N`, `serve --ubatch N`, profile schema 3, a plan at another ubatch refused | our E54 | done; calibration rows built |
 | **Same-session decode check: T8 at ubatch 512 against 2048** | test | E54's decode was 16-18% under E51's (12.67 against 15.15 warm, 11.47 against 14.07 after 16K), but the comparison crossed sessions: stock also ran about 10% slower, the hit rate was unchanged (0.906), host time per token rose, and E51's one `-ub 2048` run decoded at 14.9. Before any claim that the cost is intrinsic | our E51, E54 | S |
 | **Compute-buffer sizing for a large ubatch** | E | The 2,048-row compute buffer took about 300 MiB more VRAM beside an unchanged 9,400 MiB cache (peak 15,294 against 14,992 MiB). Size it for the large batch without shrinking the cache's share | our E54 | S-M |
 | **Prefill expert prefetch**: read layer l+1's experts while layer l computes | E | The fault stalls are serial today | ik_llama.cpp #2101, #2667: 1.9-2.7x on models larger than RAM (*theirs*, Linux) | M |
@@ -107,10 +107,18 @@ Still to build:
   min(request, 50% of physical RAM, commit room minus 4 GiB), after upstream #31122's Windows note, Maya v1.1.27 and
   Strata v0.2.6. No measured cost (E51), but in E51 and E54 every request sat below the cap and no chunk failed, so
   the cap and the failed-chunk branch are untested (dev debt 14).
-- **Calibration rows for prefill** (decided after E51 and E54, not built): on ring and tier rows, measure
-  `--moe-prefill-source mmap` and `p3` and keep the faster; when a deployment declares a ubatch, measure prefill and
-  decode at that value and report the trade. The default ubatch stays 512, and calibration raises it only when the
-  deployment declares it.
+- ~~Calibration rows for prefill~~ **built 27/10 in Python, tested offline only** (decided after E51 and E54):
+  - On a 0009 build every ring and tier row is measured with `--moe-prefill-source mmap` and `p3`. The pair is judged
+    on prefill and decode together, with differences within 10% counted as ties: the source faster on one and not
+    slower on the other keeps its row, its twin is recorded as `dominated` (skipped by the planner), a tie keeps
+    `mmap`, and a split keeps both for the planner's objective. `p3` is never paired with memory-mapped misses.
+  - A declared ubatch is a profile parameter (`calibrate --ubatch N`, `serve --ubatch N`; default 512, no flag;
+    profile schema 3, older profiles count as 512). Every row is measured at it, a profile at another value sits
+    beside the default one, and calibration prints decode and prefill beside other ubatches' profiles, marked as
+    another session. Plan, `--confirm`'s runner-up and the governor choose only rows at the declared value, and serve
+    refuses a plan measured at another, as it refuses mixing exactness classes. Whether 2048 costs decode is for the
+    same-session decode check (prefill track above) to say; the code encodes no result.
+  - Not yet run against a real engine.
 - Learned counts (P4), and a system-wide VRAM reading for the governor. The design asked for the DXGI budget, but a
   live read (27/10) showed `QueryVideoMemoryInfo` reports only the calling process's budget and usage: with another
   process holding 15 GB it still read 15,280 MiB free, against `nvidia-smi`'s 1,090. So the governor keeps
@@ -189,7 +197,7 @@ gate should use a model whose licence fits the deploying organisation.
 |---|---|---|
 | 1 | 107 commits behind upstream | **done 27/10**: rebased onto `63b4b303`, E48 passed (exact, decode exit met) |
 | 2 | M0 drops the cache budget when it launches a plan | **done 27/10**: plans restore cache budget, miss source and tier |
-| 3 | Prefill 4-5x behind stock with the tier | **paid down 27/10, opt-in:** P3 prefill +76% at 16K, exact (E51); with a declared ubatch of 2048, 156.7 tok/s against stock's 142.4 at its default ubatch, exact against all-VRAM at 2048 (E54). The defaults (`mmap`, ubatch 512) are unchanged, so a default tier row is still 4-5x behind; prefill track above |
+| 3 | Prefill 4-5x behind stock with the tier | **paid down 27/10, opt-in, and calibration now measures both prefill sources and a declared ubatch (offline):** P3 prefill +76% at 16K, exact (E51); with a declared ubatch of 2048, 156.7 tok/s against stock's 142.4 at its default ubatch, exact against all-VRAM at 2048 (E54). The defaults (`mmap`, ubatch 512) are unchanged, so a default tier row is still 4-5x behind; prefill track above |
 | 4 | Exactness proved at top-3 log-probability, not full logits; no E0 harness or parity matrix | M1.2 above |
 | 5 | Most arms ran one or two rounds | five rounds only for the decode exit; repeat any result that changes a default |
 | 6 | The build has no C++ exception unwinding (`/EHsc` off) | to fix with the rebase build |

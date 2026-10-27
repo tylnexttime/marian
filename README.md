@@ -5,7 +5,8 @@
 Marian is named after a popular Polish given name. Status: **pre-release**; M1.1 and M1.2 measured (24/10/2026),
 M1.3's calibration v1 built in Python (27/10/2026: calibration gate, cache arms, CPU thread sweep, live confirmation,
 and serving through a front proxy with a memory governor), tested offline and run on one machine only; the first
-prefill patches (0007-0009) measured the same day (register E51, E54). The full
+prefill patches (0007-0009) measured the same day (register E51, E54), and the Python side taught the P3 prefill
+source and a declared ubatch (offline tests only). The full
 story, every measured table and the mistakes are in [docs/JOURNEY.md](docs/JOURNEY.md).
 
 ## What it does
@@ -99,7 +100,8 @@ These are why a measuring tool matters. Sources and conditions for every figure 
 | P3 miss source (`--moe-miss-source mmap\|ring\|tier`, `--moe-tier-mib`, `--moe-ring-mib`) | Marian | built, measured, opt-in (default stays `mmap`) |
 | Tier safety (patch 0007): the tier is capped at min(request, 50% of physical RAM, commit room minus 4 GiB), pinned in chunks of at most 1 GiB, and stops growing at a chunk that cannot be pinned; one log line says what was pinned | Marian | built 27/10/2026, in the default build; no measured cost (register E51). The cap and the failed-chunk branch have never triggered, so they are untested |
 | Prefill misses through P3 (patch 0008): batches above 32 tokens take each missed expert from its tier slot, else by unbuffered reads through the pinned ring, never by a memory-map fault | Marian | built 27/10/2026, exact (E51, E54). Swift with the 6 GiB tier: 16K prefill 34.7 -> 61.1 tok/s (+76%, three rounds). Slower than the memory map when the model fits in the page cache (Gemma 4 26B, a 5,428-token prompt: 260 against 573 tok/s, one run each) |
-| Prefill source switch (patch 0009): `--moe-prefill-source mmap\|p3` | Marian | built 27/10/2026. Default `mmap`: upstream's uploads, byte for byte. `p3` turns 0008's path on and is refused without a ring or tier miss source |
+| Prefill source switch (patch 0009): `--moe-prefill-source mmap\|p3` | Marian | built 27/10/2026. Default `mmap`: upstream's uploads, byte for byte. `p3` turns 0008's path on and is refused without a ring or tier miss source. Calibration measures every ring and tier row with both and keeps the faster (Python side built 27/10/2026, offline tests only) |
+| Declared ubatch (`-ub N -b N`), a profile parameter: `calibrate --ubatch N`, `serve --ubatch N` | Marian | Python side built 27/10/2026, offline tests only. Default 512 (no flag). A profile records its ubatch (schema 3), and a plan measured at one ubatch is refused at another |
 | Calibration v1, Python side (M1.3): cache arms in the profiler (VRAM cliff finder, ring and tier ladder inside a RAM envelope), exact-class per row, calibration gate, launch checks, `serve --stock` rollback, `marian diag` | Marian | built, offline tests pass; one smoke run on one machine |
 | Calibration v1, serving side (M1.3): CPU thread sweep, live check and `serve --confirm` (keep-if-faster A/B), front proxy (one sequence, 503 with a reason, streaming pass-through), memory governor (watch by default; restart on a measured slowdown, opt-in), prompt-prefix reuse off by default (register test E52) | Marian | built 27/10/2026, offline tests pass (fake engine and server); see Limitations for what has run live |
 | Learned counts (rest of M1.3); ranked core, warm start, TinyLFU doorkeeper in VRAM (P2), drain removal, prefetch | Marian | designed, not built |
@@ -191,8 +193,8 @@ Be warned; this is research code.
   rounds). Each 512-token ubatch re-reads most of each layer's experts: a 16K prompt uploads 509 GiB, the tier holds
   13.8% of it, and the rest comes off the SSD at about 1.95 GB/s. It stays opt-in because it is slower when the
   model fits in the page cache: Gemma 4 26B's 5,428-token prompt ran at 573 tok/s with the memory map and 260 with
-  P3 (one run each). Calibration is meant to measure both and keep the faster; the Python side does not do that
-  yet.
+  P3 (one run each). Calibration measures both on every ring and tier row and keeps the faster (see How profiling
+  works); that has run against a fake engine only.
 - **A larger ubatch is exact against a reference at the same ubatch, and is a declared setting.** A ubatch changes
   the compute shape, so all-VRAM at `-ub 2048` and all-VRAM at the default 512 give different answers (Gemma 4 26B,
   ten prompts of 2,009-2,406 tokens: log-probabilities moved by up to 0.668, and 7 of 10 texts differed). At
@@ -204,7 +206,8 @@ Be warned; this is research code.
   16-18% under the earlier session's figures (15.15 and 14.07), which failed that test's decode bound. That
   comparison crosses sessions: stock ran about 10% slower in the same session, the hit rate was unchanged, and the
   2,048-row compute buffer takes about 300 MiB more VRAM. Until a same-session run at 512 settles it, the default
-  stays at 512. The ubatch is to become a declared profile parameter; the Python side does not carry it yet. Stock at
+  stays at 512. The ubatch is a declared profile parameter (`--ubatch`, see How serving works), tested offline
+  only. Stock at
   `-ub 2048` reached 279.6 tok/s at 16K (one run), but stock changes answers.
 - **The pinned tier competes with the desktop.** It takes RAM the OS and other programs cannot page; pinning can fail
   (it then falls back to pageable memory and says so).
@@ -278,7 +281,7 @@ Be warned; this is research code.
 | M1.1 | in progress | exactness floor PASS; trace-replay probe GO; P3 verify run PASS (11/11); P3 server arms measured 24/10/2026 (two rounds): the tier doubles decode, exact, but costs prefill about 3x; controls and the Maya drive test done; replay = server exactly (+0.00 points, the M1.1 exit check); five-round confirmation: decode exit met (E44); log-probability exactness against all-VRAM (E45) |
 | M1.2 | tooling done, policy deprioritised | the routing-id trace and the exact replay (A19); the ranked policy lost to upstream's SLRU on the real trace ([JOURNEY section 7](docs/JOURNEY.md#7-what-is-next)) |
 | M1.3 | Python side built, 27/10/2026 | `marian calibrate`, cache arms (cliff finder, miss sources, RAM envelope), calibration gate, launch checks, `serve --stock`, `--exact-only`, `marian diag`; 26 new offline tests, and the whole offline suite passes. One GPU smoke on the reference laptop (27/10/2026, the M1.2 build at the old pin: Gemma 4 26B-A4B IQ3_XXS, context 4096, 218 s): the gate refused before calibration, the walk, two cache budgets, the ring and two tier sizes ran, `plan`, `serve --dry-run` and `serve --stock --dry-run` passed. Serving side built the same day: CPU thread sweep, live check and `serve --confirm`, front proxy (one sequence, 503 with a reason, streaming), memory governor with supervised restart, prompt-prefix reuse off by default; 30 more offline tests (the whole suite: 118). Register test E52: prefix reuse is not exact (0 of 10 reused answers matched), so it stays off in exact mode. **The M1.3 exit is not met:** in E53 the governor kept every answer exact across two restarts, but restarting on a memory reading cost more than the pressure did, so its default is now `watch` and `restart` (on a measured slowdown, with a step-up) is opt-in and has run offline only. The fork's pinning rules: chunked pinning and the RAM cap are in patch 0007; the cap has never triggered. Not built: learned counts |
-| Prefill track | first patches measured, 27/10/2026 | patch 0008 (prefill misses through P3, opt-in via 0009's `--moe-prefill-source p3`): +76% at 16K with the tier, exact (E51). A declared ubatch of 2048 is exact against all-VRAM at the same ubatch and, with P3 prefill, beat stock's default prefill at 16K (156.7 against 142.4 tok/s, three rounds); its decode was 16-18% under the earlier session's, cause not yet separated (E54). Defaults unchanged: `mmap` and ubatch 512 |
+| Prefill track | first patches measured, 27/10/2026; calibration rows built (offline) | patch 0008 (prefill misses through P3, opt-in via 0009's `--moe-prefill-source p3`): +76% at 16K with the tier, exact (E51). A declared ubatch of 2048 is exact against all-VRAM at the same ubatch and, with P3 prefill, beat stock's default prefill at 16K (156.7 against 142.4 tok/s, three rounds); its decode was 16-18% under the earlier session's, cause not yet separated (E54). Defaults unchanged: `mmap` and ubatch 512. The Python side (27/10/2026) measures ring and tier rows with both prefill sources and keeps the faster, and carries a declared ubatch through calibrate, plan, serve and diag, refusing a plan at another ubatch; 26 offline tests (the whole suite: 155), each behaviour broken once on purpose and caught |
 | M1.4 onwards | not started | real-hardware validation (see [DESIGN-M1 section 10](docs/design/DESIGN-M1.md)) |
 
 **M1 exit criteria, and where each stands** (reference laptop, Swift 1.5 IQ2_XS):
@@ -332,6 +335,7 @@ Everything else, with conditions and what each table taught us: [docs/JOURNEY.md
 python -m marian machine                                   # GPU, VRAM, RAM, driver; a fingerprint, no hostname
 python -m marian inspect model.gguf                        # architecture, layers, experts, MoE or dense
 python -m marian calibrate model.gguf --engine path/to/llama-server     # the quick profile: one context, one KV type
+python -m marian calibrate model.gguf --engine path/to/llama-server --ubatch 2048   # ... for a deployment that declares -ub 2048
 python -m marian profile model.gguf --engine path/to/llama-server --ctx 4096,8192,16384 --kv f16,q8_0   # the full one
 python -m marian plan model.gguf --need 6000               # the fastest measured configuration for 6,000 tokens
 python -m marian plan model.gguf --need 6000 --fit-now --json   # ... that also fits the VRAM free right now, as JSON
@@ -339,6 +343,7 @@ python -m marian plan model.gguf --need 6000 --exact-only  # ... computing every
 python -m marian serve model.gguf --engine path/to/llama-server --need 6000     # refuses until this machine is calibrated
 python -m marian serve model.gguf --engine path/to/llama-server --need 6000 --calibrate   # calibrate first, then serve
 python -m marian serve model.gguf --engine path/to/llama-server --need 6000 --stock       # rollback: plain upstream flags
+python -m marian serve model.gguf --engine path/to/llama-server --need 6000 --ubatch 2048 # only rows measured at 2048
 python -m marian serve model.gguf --engine path/to/llama-server --need 6000 --confirm     # A/B the plan against the runner-up first
 python -m marian diag diag.zip model.gguf --engine path/to/llama-server   # a bundle to share: no prompts, home as ~
 ```
@@ -380,6 +385,22 @@ on the GPU: full offload or any cache arm) or not (stock `-ncmoe` above 0, which
 before and at its lowest, commit headroom, the server's peak working set and commit, and what the fork's log said.
 `--max-cache-mib` caps the cache, `--ram-floor` sets the floor, `--no-cache` skips the arms.
 
+On a build with patch 0009 (its `--help` lists `--moe-prefill-source`), every ring and tier row is measured twice:
+with the default prefill source (`mmap`, upstream's path) and with `p3` (prefill misses from the same ring and tier).
+Both are exact, and which is faster depends on the machine (register E51: +76% at 16K under memory pressure, under
+half the speed when the model fits in the page cache). The pair is judged on prefill and decode together, with
+differences within 10% counted as ties: a source faster on one and not slower on the other keeps its row, and its
+twin is recorded as `dominated`, which the planner skips; a tie keeps the default; a split keeps both, and the
+planner's objective (`--objective tg` or `pp`) chooses. `p3` is never measured or launched beside memory-mapped
+misses, which the fork refuses. Each profile's `prefill_pairs` says what was kept and why.
+
+`--ubatch N` (default 512) measures every row at `-ub N -b N`. A ubatch is part of the exactness reference (register
+E54), so it is declared by the deployment, never picked by calibration. The profile records it (schema 3) and, at a
+value other than 512, is written beside the default profile (`...-ub2048.json`) rather than over it. Calibration then
+prints the best decode and the best prefill of each context at that ubatch, beside the same figures from this
+machine's profiles at other ubatches, marked as another session, so the trade is visible; nothing in the code
+assumes what it is.
+
 Rows that compute on the CPU (stock `-ncmoe` above 0, or a dense model with layers left on the CPU) get a **CPU thread
 sweep**: the fastest such point of each context and KV type is measured again at physical cores, cores - 2,
 cores / 2, 8 and 4 threads, and every result is kept as a row, so the planner picks the fastest. CPU expert work is
@@ -387,6 +408,16 @@ bound by memory bandwidth, and Project Maya reported 15 -> 41 tok/s with fewer t
 the count instead, `--no-thread-sweep` skips it. Rows that compute every expert on the GPU skip it.
 
 ## How serving works
+
+**The declared ubatch.** `plan` and `serve` take `--ubatch N` (default 512, no flag), and use only rows measured at
+that ubatch: a plan measured at one ubatch is never served at another, just as an exact-only plan never takes a
+non-exact row. Without a calibration at the declared value, `serve` refuses (exit 2, reason `ubatch`) and names the
+ubatches that were measured; `--calibrate` measures at the declared value first. The filter sits where the planner,
+`--confirm`'s runner-up and the governor's restarts all choose rows, and the launch checks repeat it. Profiles written
+before the declared ubatch (schema 1 and 2) were measured without `-ub`, so they count as 512; a profile of a newer
+schema than this version reads is refused. `--dry-run` prints both settings in one line (`--json`: `ubatch` and
+`prefill_source`), and `marian diag --ubatch N` records them in the bundle's plan. `--stock` keeps its rows and rules;
+it too serves only rows measured at the declared ubatch.
 
 `serve` puts llama-server on an internal port (`--port` + 1, 127.0.0.1 only) and a small standard-library proxy on
 `--port`. The proxy serves **one request at a time** with one more waiting (concurrent requests change the kernels and
@@ -436,8 +467,9 @@ prefill exactly; next, fewer bytes per prompt); calibration v1 with Windows pinn
 - **M1.3:** calibration v1. Built (Python): the VRAM cliff finder, miss sources in a RAM safety envelope, the CPU
   thread sweep, the plan, the calibration gate, launch checks, the `--stock` rollback, the diagnostics bundle, live
   confirmation, and serving through a proxy with a memory governor (watch by default since register E53). Still to
-  do: learned counts, a live run of the governor's `restart` mode, a test that makes 0007's tier cap trigger, and
-  calibration rows for the prefill source and a declared ubatch.
+  do: learned counts, a live run of the governor's `restart` mode, a test that makes 0007's tier cap trigger, and a
+  live run of the calibration rows for the prefill source and a declared ubatch (built 27/10/2026, offline tests
+  only).
 - **M1.4:** real hardware: a real 8 GB GPU, Linux, a slower link and drive.
 - **M2:** the full expert source (prefill included), removing the per-layer drain, look-ahead prefetch.
 - **M3 to M5:** verified speculation, opt-in answer-changing switches with blind quality gates, and prefill work.
