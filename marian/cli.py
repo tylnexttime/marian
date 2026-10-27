@@ -3,12 +3,13 @@
     python -m marian machine
     python -m marian inspect MODEL.gguf
     python -m marian profile MODEL.gguf --engine PATH/llama-server --ctx 4096,8192,16384 --kv f16,q8_0 [--step 2]
-    python -m marian calibrate MODEL.gguf --engine PATH/llama-server [--ctx 4096] [--kv f16]   (the quick profile)
-    python -m marian plan MODEL.gguf --need 6000 [--objective pp] [--fit-now | --vram-free MIB] [--exact-only | --stock] [--json]
+    python -m marian calibrate MODEL.gguf --engine PATH/llama-server [--ctx 4096] [--kv f16] [--ubatch 512]   (the quick profile)
+    python -m marian plan MODEL.gguf --need 6000 [--objective pp] [--fit-now | --vram-free MIB] [--exact-only | --stock]
+                          [--ubatch 512] [--json]
     python -m marian serve MODEL.gguf --engine PATH/llama-server --need 6000 [--port 9951] [--calibrate] [--exact-only |
-                           --stock] [--confirm] [--governor watch|restart|off] [--cache-prompt on --gate-prefix FILE]
-                           [--dry-run] [--json]
-    python -m marian diag OUT.zip [MODEL.gguf] [--engine PATH/llama-server] [--need 6000]
+                           --stock] [--ubatch 512] [--confirm] [--governor watch|restart|off]
+                           [--cache-prompt on --gate-prefix FILE] [--dry-run] [--json]
+    python -m marian diag OUT.zip [MODEL.gguf] [--engine PATH/llama-server] [--need 6000] [--ubatch 512]
     python -m marian geometry SHARD.gguf [SHARD.gguf ...] -o MODEL.geometry.json
     python -m marian replay TAG.ids.bin --geometry MODEL.geometry.json --budget-mib 9400 [--requests TAG.requests.jsonl]
                             [--trace TAG.trace.csv] [--fills TAG.fills.csv] [--md OUT.md] [--json OUT.json]
@@ -28,6 +29,10 @@ Then it serves through a front proxy on --port (llama-server on --internal-port,
 time, a memory governor (`--governor watch` by default: it warns, and pauses only on low commit headroom;
 `restart` also restarts on a measured slowdown), the passive live check, and prefix reuse off until E52 passes
 (serve.py); `--confirm` first A/B-tests the plan against the runner-up (confirm.py).
+
+`--ubatch N` declares the deployment's ubatch (default 512, no flag; `-ub N -b N` otherwise). It is part of the
+exactness reference (register E54), so it is declared, never chosen: `calibrate --ubatch N` measures every row at N
+into its own profile, and `plan` and `serve` use only rows measured at the ubatch they declare, refusing otherwise.
 """
 from __future__ import annotations
 
@@ -41,7 +46,7 @@ from pathlib import Path
 
 from . import geometry, gguf, idstrace, machine, plan, predict, profile, replay, synth
 from . import confirm, launch, serve
-from .engines import LlamaCpp
+from .engines import DEFAULT_UBATCH, LlamaCpp
 from .profile import CacheOptions, ThreadOptions, sha256_head
 
 
@@ -88,6 +93,8 @@ def main(argv=None) -> int:
         g.add_argument("--stock", action="store_true", help="only plain upstream placement (-ncmoe/-ngl): the rollback")
         p.add_argument("--port", type=int, default=9951)
         p.add_argument("--json", action="store_true", help="one JSON object on stdout, for other programs")
+        p.add_argument("--ubatch", type=int, default=DEFAULT_UBATCH, metavar="N",
+                       help="the deployment's declared ubatch; only rows measured at it are used (default 512)")
         if name == "serve":
             p.add_argument("--engine", required=True)
             p.add_argument("--calibrate", action="store_true", help="no profile yet: run the quick calibration, then serve")
@@ -119,6 +126,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("diag", help="a diagnostics bundle (zip): machine, profiles, plan, log tails; no prompts or paths")
     p.add_argument("out", type=Path); p.add_argument("model", type=Path, nargs="?")
     p.add_argument("--engine"); p.add_argument("--need", type=int, default=4096); p.add_argument("--port", type=int, default=9951)
+    p.add_argument("--ubatch", type=int, default=DEFAULT_UBATCH, metavar="N", help="the declared ubatch the plan is for")
     p = sub.add_parser("geometry", help="expert geometry of a MoE GGUF (headers only) as JSON, for replay")
     p.add_argument("shards", type=Path, nargs="+"); p.add_argument("-o", "--out", type=Path)
     p = sub.add_parser("replay", help="replay a routing-id trace through expert-cache and RAM-tier policies")
@@ -160,6 +168,9 @@ def main(argv=None) -> int:
     p.add_argument("--ubatch", type=int, default=512); p.add_argument("--alignment", type=int, default=geometry.CUDA_ALIGNMENT)
     p.add_argument("--md", type=Path); p.add_argument("--json", type=Path)
     a = ap.parse_args(argv)
+    if getattr(a, "ubatch", 1) < 1 and a.cmd not in ("replay", "predict"):
+        print(f"--ubatch {a.ubatch}: a ubatch is a positive token count", file=sys.stderr)
+        return 2
 
     if a.cmd == "machine":
         print(json.dumps(machine.detect().to_dict(), indent=1))
@@ -183,16 +194,19 @@ def main(argv=None) -> int:
     elif a.cmd == "profile":
         eng = LlamaCpp(a.engine, a.port)
         out = profile.run(a.model, eng, [int(x) for x in a.ctx.split(",")], a.kv.split(","), a.step, a.threads,
-                          PROFILES, a.n_predict, cache=_cache_opts(a), sweep=ThreadOptions(enabled=not a.no_thread_sweep))
+                          PROFILES, a.n_predict, cache=_cache_opts(a), sweep=ThreadOptions(enabled=not a.no_thread_sweep),
+                          ubatch=a.ubatch)
         print(f"profile written: {out}")
+        _report_trade(out)
     elif a.cmd == "calibrate":
         eng = LlamaCpp(a.engine, a.port)
         out = profile.run(a.model, eng, [a.ctx], [a.kv], a.step, a.threads, PROFILES, a.n_predict, cache=_cache_opts(a),
-                          sweep=ThreadOptions(enabled=not a.no_thread_sweep))
+                          sweep=ThreadOptions(enabled=not a.no_thread_sweep), ubatch=a.ubatch)
         print(f"calibration written: {out}")
+        _report_trade(out)
     elif a.cmd == "diag":
         eng = LlamaCpp(a.engine, a.port) if a.engine else None
-        names = launch.write_diag(a.out, PROFILES, a.model, eng, a.need, a.port)
+        names = launch.write_diag(a.out, PROFILES, a.model, eng, a.need, a.port, ubatch=a.ubatch)
         print(f"diagnostics written: {a.out} ({len(names)} files; no prompt text, home shown as ~)")
     elif a.cmd in ("plan", "serve"):
         return _plan_or_serve(a)
@@ -204,7 +218,22 @@ def _cache_args(p, tier_steps: int) -> None:
     p.add_argument("--max-cache-mib", type=int, help="never offer the expert cache more VRAM than this")
     p.add_argument("--ram-floor", type=int, default=6144, metavar="MIB", help="never pin more than (RAM available - this)")
     p.add_argument("--tier-steps", type=int, default=tier_steps, help="pinned RAM tier sizes to measure")
+    p.add_argument("--ubatch", type=int, default=DEFAULT_UBATCH, metavar="N",
+                   help="the deployment's declared ubatch: every row is measured at -ub N -b N (512: no flag)")
     p.add_argument("--no-thread-sweep", action="store_true", help="no CPU thread ladder for rows that compute on the CPU")
+
+
+def _report_trade(out: Path) -> None:
+    """Decode and prefill at the calibrated ubatch, beside this machine's profiles of the model at other ubatches."""
+    try:
+        doc = json.loads(out.read_text(encoding="utf-8"))
+        others = [d for p, d in plan.load_docs(out.parent, Path((doc.get("model") or {}).get("file", "")),
+                                               (doc.get("model") or {}).get("id"))
+                  if p != out and (d.get("engine") or {}).get("name") == (doc.get("engine") or {}).get("name")]
+    except (OSError, ValueError):
+        return
+    for line in launch.trade_lines(doc, others):
+        print(line)
 
 
 def _cache_opts(a) -> CacheOptions:
@@ -221,14 +250,21 @@ def _plan_or_serve(a) -> int:
     if serve_cmd and a.gate_prefix is not None and a.cache_prompt != "on":
         return _plan_fail(a, "--gate-prefix primes llama-server's prompt reuse, which is off: prefix reuse stays opt-in "
                              "until register test E52 shows it exact; add --cache-prompt on to opt in", [], None)
-    if serve_cmd and not plan.rows_of(docs, eng.name):                   # the calibration gate
+    for p, d in docs:
+        why = plan.schema_problem(d)
+        if why:
+            return _plan_fail(a, f"{p.name}: {why}", [], None, gate="schema")
+    eng_rows = plan.rows_of(docs, eng.name) if serve_cmd else []
+    if serve_cmd and not any(plan.ubatch_of(r) == a.ubatch for r in eng_rows):     # the calibration gate
         if not a.calibrate:
-            return _plan_fail(a, launch.gate_reason(a.model, eng.name), [], None, gate="no_calibration")
+            measured = plan.ubatches(eng_rows) if eng_rows else None
+            return _plan_fail(a, launch.gate_reason(a.model, eng.name, a.ubatch, measured), [], None,
+                              gate="ubatch" if measured else "no_calibration")
         ctx = launch.quick_ctx(a.need)
-        print(f"no calibration for this machine, model and engine yet: calibrating at context {ctx} first",
-              file=sys.stderr)
+        print(f"no calibration for this machine, model and engine at ubatch {a.ubatch} yet: calibrating at context "
+              f"{ctx} first", file=sys.stderr)
         profile.run(a.model, eng, [ctx], ["f16"], 2, None, PROFILES, 32,
-                    cache=CacheOptions(ram_floor_mib=a.ram_floor, tier_steps=2))
+                    cache=CacheOptions(ram_floor_mib=a.ram_floor, tier_steps=2), ubatch=a.ubatch)
         docs = plan.load_docs(PROFILES, a.model, mid)
     rows = plan.rows_of(docs, eng.name if eng else None)
     free, ram_free = a.vram_free, None
@@ -241,10 +277,10 @@ def _plan_or_serve(a) -> int:
         ram_free = machine.ram_mib()[1]
     filters = dict(exact_only=a.exact_only, stock=a.stock)
     row = plan.choose(rows, a.need, a.objective, vram_free_mib=free, margin_mib=a.margin, ram_free_mib=ram_free,
-                      ram_floor_mib=a.ram_floor, **filters)
+                      ram_floor_mib=a.ram_floor, ubatch=a.ubatch, **filters)
     if row is None:
         why = launch.explain(rows, a.need, a.objective, a.model.name, free=free, margin=a.margin, ram_free=ram_free,
-                             ram_floor=a.ram_floor, **filters)
+                             ram_floor=a.ram_floor, ubatch=a.ubatch, **filters)
         return _plan_fail(a, why, rows, free)
     warnings: list[str] = []
     if serve_cmd:
@@ -252,7 +288,8 @@ def _plan_or_serve(a) -> int:
             eng.server_extra = ["--no-cache-prompt"]
         doc = next(d for p, d in docs if p.name == row["_file"])
         reasons, warnings = launch.check(row, doc, a.model, mid, eng, stock=a.stock, vram_free_mib=free,
-                                         margin_mib=a.margin, ram_free_mib=ram_free, ram_floor_mib=a.ram_floor)
+                                         margin_mib=a.margin, ram_free_mib=ram_free, ram_floor_mib=a.ram_floor,
+                                         ubatch=a.ubatch)
         if reasons:
             return _plan_fail(a, "launch checks failed: " + "; ".join(reasons), rows, free,
                               reasons=reasons, warnings=warnings, row=_clean(row))
@@ -262,6 +299,7 @@ def _plan_or_serve(a) -> int:
                           "vram_free_mib": free, "margin_mib": a.margin if free is not None else None,
                           "ram_available_mib": ram_free, "vram_basis": plan.vram_share(row)[1],
                           "exact_class": plan.exact_class(row), "stock": plan.is_stock(row), "warnings": warnings,
+                          **launch.settings(cfg),
                           "row": _clean(row), "config": asdict(cfg),
                           "server_args": _server_args(a, eng, cfg),
                           "port": a.port, "internal_port": internal if serve_cmd else None,
@@ -270,6 +308,7 @@ def _plan_or_serve(a) -> int:
                           "profile_file": row.get("_file")}))
     else:
         print(json.dumps(_clean(row)))
+        print(launch.settings_line(cfg), file=sys.stderr)
         for w in warnings:
             print(f"warning: {w}", file=sys.stderr)
         if not plan.exact_class(row):
@@ -299,7 +338,7 @@ def _serve(a, eng, rows, docs, row, mid, free, ram_free, filters) -> int:
     allow = a.allow_non_exact or a.stock
     if a.confirm:
         ru = plan.runner_up(rows, row, a.need, a.objective, free, a.margin, ram_free_mib=ram_free,
-                            ram_floor_mib=a.ram_floor, allow_non_exact=allow, **filters)
+                            ram_floor_mib=a.ram_floor, allow_non_exact=allow, ubatch=a.ubatch, **filters)
         copt = confirm.ConfirmOptions(rounds=a.confirm_rounds, slow=a.slow)
         if ru is None:
             say("confirm: no runner-up under the same filters (and exact class); the plan stands unconfirmed")
@@ -321,7 +360,8 @@ def _serve(a, eng, rows, docs, row, mid, free, ram_free, filters) -> int:
             if d["outcome"] == "replaced":
                 doc = next(dd for p, dd in docs if p.name == ru["_file"])
                 reasons, _ = launch.check(ru, doc, a.model, mid, eng, stock=a.stock, vram_free_mib=free,
-                                          margin_mib=a.margin, ram_free_mib=ram_free, ram_floor_mib=a.ram_floor)
+                                          margin_mib=a.margin, ram_free_mib=ram_free, ram_floor_mib=a.ram_floor,
+                                          ubatch=a.ubatch)
                 if reasons:
                     return _plan_fail(a, "launch checks failed for the confirmed runner-up: " + "; ".join(reasons),
                                       rows, free, reasons=reasons)
@@ -332,7 +372,8 @@ def _serve(a, eng, rows, docs, row, mid, free, ram_free, filters) -> int:
                              queue_timeout_s=a.queue_timeout, governor=a.governor, interval_s=a.interval,
                              persist_s=a.persist, step_up_s=a.step_up,
                              drain_s=a.drain, max_restarts=a.max_restarts, cache_prompt=a.cache_prompt == "on",
-                             gate_prefix=gate_text, live_n=a.live_n, slow=a.slow, allow_non_exact=allow, **filters)
+                             gate_prefix=gate_text, live_n=a.live_n, slow=a.slow, allow_non_exact=allow,
+                             ubatch=a.ubatch, **filters)
     try:
         sess, why = serve.open_session(eng, a.model, rows, row, opt, log, profile_dir=PROFILES, say=say)
     except OSError as e:

@@ -118,6 +118,7 @@ class ServeOptions:
     exact_only: bool = False
     stock: bool = False
     allow_non_exact: bool = False
+    ubatch: int = 512                 # the declared ubatch: a restart or step-up never leaves it (plan.candidates)
 
 
 # --- the serving envelope -----------------------------------------------------------------------------------------
@@ -640,7 +641,8 @@ class Supervisor:
                 self.rows, cur, self.opt.need, self.opt.objective, pressure=kinds, vram_free_mib=r.get("vram_free_mib"),
                 ram_free_mib=r.get("ram_avail_mib"), margin_mib=self.opt.margin_mib,
                 ram_floor_mib=floors(cur, self.opt, r.get("ram_total_mib") or 0)["ram_avail_mib"],
-                exact_only=self.opt.exact_only, stock=self.opt.stock, allow_non_exact=self.opt.allow_non_exact)
+                exact_only=self.opt.exact_only, stock=self.opt.stock, allow_non_exact=self.opt.allow_non_exact,
+                ubatch=self.opt.ubatch)
         self.engine.stop()
         if nxt is None:
             extra = ("" if not plan.exact_class(cur) or self.opt.allow_non_exact else

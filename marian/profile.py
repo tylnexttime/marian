@@ -45,6 +45,24 @@ KV) cell's fastest CPU-computing walk point is measured again at a small ladder 
 cores - 2, cores / 2, 8, 4; never above the logical processors) and every result is kept as a row (`arm` threads), so
 the planner simply picks the fastest. Rows that compute every expert on the GPU (full offload, cache arms) skip it:
 their threads only feed the GPU.
+
+**P3 prefill rows (M1.3, after register E51).** On a build with patch 0009 (`--moe-prefill-source`), every ring and
+tier row is measured twice: with the default prefill source (`mmap`, upstream's large-batch path) and with `p3` (the
+large-batch misses from the same ring and tier). Both are exact; which is faster depends on the machine: E51 measured
+p3 at +76% for a 16K prompt on a machine under memory pressure, and at less than half the memory map's speed on a
+model that fits in the page cache. So the pair is judged here, on prefill and decode together (`prefill_pair`): a
+source that is faster on one by more than the noise band (10%, the README's rule for few-round results) and not
+slower on the other beyond it keeps its row, and its twin is marked `dominated`, which the planner skips. A tie on
+both keeps the default (`mmap`). A split (one faster on prefill, the other on decode) keeps both rows, and the
+planner's objective decides (`--objective pp` for read-heavy work). `p3` is never measured, or launched, beside
+memory-mapped misses: the fork refuses that pairing.
+
+**The declared ubatch (M1.3, after register E54).** A ubatch is part of the exactness reference, so it is declared by
+the deployment (`marian calibrate --ubatch 2048`), never chosen here. Every row of a profile is measured at the
+declared ubatch (`-ub N -b N`; the default, 512, passes no flag), the profile records it (schema 3), and a profile at
+a ubatch other than 512 gets its own file (`...-ub2048.json`), so it sits beside the default one rather than replacing
+it. `ubatch_report` puts the best decode and the best prefill of each cell side by side, so the trade a declared
+ubatch makes is visible; this code encodes no expectation of what that trade is.
 """
 from __future__ import annotations
 
@@ -59,7 +77,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import geometry, gguf, machine
-from .engines import RING_DEFAULT_MIB, Config, LlamaCpp
+from .engines import DEFAULT_UBATCH, P3_MISS_SOURCES, RING_DEFAULT_MIB, Config, LlamaCpp
+
+PROFILE_SCHEMA = 3        # 3: the declared ubatch and P3 prefill rows; 2: cache arms (M1.3); 1: M0
+PAIR_NOISE = 0.10         # prefill_pair: a speed difference within 10% is a tie (one probe per arm)
 
 FILLER = ("The workshop opens at eight. Apprentices sign in, check the job board and collect their tools. "
           "Safety briefings come first, then practical tasks, then a short review before lunch. ")
@@ -81,7 +102,9 @@ class CacheOptions:
     tier_ladder_mib: tuple[int, ...] = (1024, 2048, 4096, 6144, 8192, 12288, 16384)
     tier_steps: int = 3                  # measure at most this many tier sizes: the largest the envelope allows
     ring: bool = True
-    n_ubatch: int = 512                  # the server's default; the exactness floor depends on it
+    n_ubatch: int = 512                  # the server's default; the exactness floor depends on it (run() sets it to
+                                         # the declared ubatch)
+    prefill_p3: bool = True              # measure each ring and tier row with --moe-prefill-source p3 too (0009 builds)
 
 
 @dataclass
@@ -342,10 +365,75 @@ def model_geometry(model: Path) -> geometry.Geometry | None:
         return None
 
 
+def _speed_verdict(a: float | None, b: float | None, noise: float) -> int:
+    """+1 if a is faster than b beyond the noise band, -1 if slower beyond it, 0 for a tie or a missing figure."""
+    if not a or not b:
+        return 0
+    r = a / b
+    return 1 if r > 1 + noise else -1 if r < 1 / (1 + noise) else 0
+
+
+def prefill_pair(mmap_row: dict, p3_row: dict, noise: float = PAIR_NOISE) -> dict:
+    """Judge one ring or tier configuration measured with both prefill sources, on prefill AND decode; mark the
+    loser `dominated` in place (the planner only uses ok rows) and return the verdict for the profile.
+
+    p3 keeps its row when it is faster on one figure beyond the noise band and not slower on the other beyond it;
+    the default (mmap) keeps its row in the mirror case and on a tie, so p3 must earn its place. A split keeps both,
+    and the planner's objective chooses between them."""
+    out = {"miss_source": mmap_row.get("miss_source"), "tier_mib": mmap_row.get("tier_mib"), "noise": noise}
+    if mmap_row.get("status") != "ok" or p3_row.get("status") != "ok":
+        out["kept"] = "mmap" if mmap_row.get("status") == "ok" else ("p3" if p3_row.get("status") == "ok" else None)
+        out["why"] = f"not both measured (mmap {mmap_row.get('status')}, p3 {p3_row.get('status')})"
+        return out
+    pp = _speed_verdict(p3_row.get("pp_tps"), mmap_row.get("pp_tps"), noise)
+    tg = _speed_verdict(p3_row.get("tg_tps"), mmap_row.get("tg_tps"), noise)
+    out.update(prefill={"mmap": mmap_row.get("pp_tps"), "p3": p3_row.get("pp_tps")},
+               decode={"mmap": mmap_row.get("tg_tps"), "p3": p3_row.get("tg_tps")})
+    if 1 in (pp, tg) and -1 not in (pp, tg):
+        loser, out["kept"] = mmap_row, "p3"
+        out["why"] = "p3 is faster beyond the noise band on " + " and ".join(
+            n for n, v in (("prefill", pp), ("decode", tg)) if v == 1) + ", and not slower on the other"
+    elif 1 in (pp, tg):
+        out["kept"], out["why"] = "both", ("split: p3 is faster on " + ("prefill" if pp == 1 else "decode") +
+                                           " and slower on " + ("decode" if pp == 1 else "prefill") +
+                                           "; the planner's objective chooses")
+        return out
+    else:
+        loser, out["kept"] = p3_row, "mmap"
+        out["why"] = ("a tie on prefill and decode: the default stays" if (pp, tg) == (0, 0) else
+                      "p3 is slower beyond the noise band on " + " and ".join(
+                          n for n, v in (("prefill", pp), ("decode", tg)) if v == -1) + ", and not faster on the other")
+    loser["status"] = "dominated"
+    loser["note"] = f"prefill source {'p3' if loser is p3_row else 'mmap'} lost to its twin: {out['why']}"
+    return out
+
+
+def ubatch_report(rows: list[dict]) -> list[dict]:
+    """Per (context, KV) cell, the fastest decode row and the fastest prefill row, each with both figures, overall
+    and among exact-class rows: what a declared ubatch buys and costs, side by side."""
+    out = []
+    for ctx, kv in sorted({(r["ctx"], r["kv"]) for r in rows}):
+        cell = {"ctx": ctx, "kv": kv}
+        for label, pool in (("all", [r for r in rows if r["ctx"] == ctx and r["kv"] == kv and r["status"] == "ok"]),
+                            ("exact", [r for r in rows if r["ctx"] == ctx and r["kv"] == kv and r["status"] == "ok"
+                                       and r.get("exact_class")])):
+            best = {}
+            for k, name in (("tg_tps", "best_decode"), ("pp_tps", "best_prefill")):
+                top = max(pool, key=lambda r: r.get(k) or 0, default=None)
+                if top is not None:
+                    best[name] = {"tg_tps": top.get("tg_tps"), "pp_tps": top.get("pp_tps"), "arm": top.get("arm"),
+                                  "config": Config.from_row(top).key()}
+            cell[label] = best
+        out.append(cell)
+    return out
+
+
 def cache_arms(model: Path, engine, s: dict, geom, ctx: int, kv: str, threads: int | None, walk_rows: list[dict],
                log: Path, total_vram: int, n_predict: int, margin_mib: int, collapse: float,
-               opt: CacheOptions) -> tuple[list[dict], dict]:
-    """The cliff finder and the miss sources for one (context, KV) cell; returns its rows and a summary of the search."""
+               opt: CacheOptions, *, ubatch: int = DEFAULT_UBATCH, p3: bool = False) -> tuple[list[dict], dict]:
+    """The cliff finder and the miss sources for one (context, KV) cell; returns its rows and a summary of the search.
+    With p3 (the engine has --moe-prefill-source), every ring and tier row gets a P3-prefill twin, judged by
+    prefill_pair."""
     n = s["block_count"] or 0
     summary: dict = {"ctx": ctx, "kv": kv}
     rows: list[dict] = []
@@ -371,7 +459,7 @@ def cache_arms(model: Path, engine, s: dict, geom, ctx: int, kv: str, threads: i
 
     def run_one(budget: int, arm: str, **src) -> dict:
         c = Config(ctx=ctx, cache_type=kv, threads=threads, n_gpu_layers=999, n_cpu_moe=n, load_mode="mmap",
-                   moe_cache_mib=budget, **src)
+                   moe_cache_mib=budget, ubatch=ubatch, **src)
         row = dict(c.to_row(), arm=arm, exact_class=c.exact_class(n))
         measure(engine, model, c, row, log, n_predict)
         judge(row, total_vram, margin_mib, 0.0, collapse)            # VRAM near full; speed is judged by the caller
@@ -389,10 +477,27 @@ def cache_arms(model: Path, engine, s: dict, geom, ctx: int, kv: str, threads: i
     if full is not None and best >= full:
         summary["skipped_sources"] = "every expert fits in the VRAM cache: no misses to serve"
         return rows, summary
+    pairs: list[dict] = []
+    if opt.prefill_p3 and p3:
+        summary["prefill_pairs"] = pairs
+    elif opt.prefill_p3:
+        summary["prefill_pairs"] = "skipped: the engine has no --moe-prefill-source (patch 0009)"
+
+    def twin(r: dict, **src) -> dict | None:
+        """The same ring or tier row with P3 prefill, judged against it; never for memory-mapped misses."""
+        if not (opt.prefill_p3 and p3) or r["status"] != "ok" or src.get("miss_source") not in P3_MISS_SOURCES:
+            return None
+        t = run_one(best, "source", prefill_source="p3", **src)
+        if t["status"] == "ok" and src["miss_source"] == "tier" and t["ram_avail_low_mib"] < opt.ram_floor_mib:
+            t["status"] = "ram_envelope"
+            t["note"] = f"RAM available fell to {t['ram_avail_low_mib']} MiB, below the {opt.ram_floor_mib} MiB floor"
+        pairs.append(prefill_pair(r, t))
+        return t
+
     if opt.ring:
         free = machine.ram_mib()[1]
         if RING_DEFAULT_MIB <= free - opt.ram_floor_mib:
-            run_one(best, "source", miss_source="ring")
+            twin(run_one(best, "source", miss_source="ring"), miss_source="ring")
         else:
             summary["ring"] = f"skipped: {free} MiB available leaves less than the {opt.ram_floor_mib} MiB floor"
     free = machine.ram_mib()[1]
@@ -412,6 +517,10 @@ def cache_arms(model: Path, engine, s: dict, geom, ctx: int, kv: str, threads: i
         if r["status"] != "ok":
             summary["ram_envelope"]["stopped"] = f"tier {t} MiB: {r['status']}"
             break
+        tw = twin(r, miss_source="tier", tier_mib=t)
+        if tw is not None and tw["status"] in ("ram_envelope", "overflow"):
+            summary["ram_envelope"]["stopped"] = f"tier {t} MiB with P3 prefill: {tw['status']}"
+            break
     return rows, summary
 
 
@@ -423,10 +532,19 @@ def _capabilities(engine) -> dict:
         return {}
 
 
+def profile_name(stem: str, ubatch: int) -> str:
+    """The profile's file name: the default ubatch keeps the name M0 used; a declared one gets its own file, so a
+    deployment at 2048 does not replace the profile at 512 (each keeps one previous copy)."""
+    return f"{stem}.json" if ubatch == DEFAULT_UBATCH else f"{stem}-ub{ubatch}.json"
+
+
 def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: int, threads: int | None,
         out_dir: Path, n_predict: int = 64, vram_margin_mib: int = 300, collapse: float = 0.6,
-        cache: CacheOptions | None = None, sweep: ThreadOptions | None = None) -> Path:
+        cache: CacheOptions | None = None, sweep: ThreadOptions | None = None, ubatch: int = DEFAULT_UBATCH) -> Path:
+    if ubatch < 1:
+        raise ValueError(f"ubatch {ubatch} is not a positive token count")
     cache = cache or CacheOptions()
+    cache.n_ubatch = ubatch                               # the exactness floor is computed at the declared ubatch
     sweep = sweep or ThreadOptions()
     s = gguf.summary(model)
     m = machine.detect()
@@ -436,7 +554,7 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
     geom = model_geometry(model) if with_cache else None
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{m.fingerprint()}-{sha256_head(model)}-{engine.name}"
-    log = out_dir / f"{stem}.server.log"
+    log = out_dir / (profile_name(stem, ubatch)[:-len(".json")] + ".server.log")
     rows, searches, sweeps = [], [], []
     ladder: list[int] = []
     if sweep.enabled and threads is None:
@@ -445,7 +563,7 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
         for ctx in ctxs:
             best, cell = 0.0, []
             for knob, k in splits(s, step):
-                c = Config(ctx=ctx, cache_type=kv, threads=threads)
+                c = Config(ctx=ctx, cache_type=kv, threads=threads, ubatch=ubatch)
                 if knob == "n_cpu_moe":
                     c.n_gpu_layers, c.n_cpu_moe = 999, k
                 else:
@@ -467,13 +585,16 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
                 sweeps.append(tsum)
             if with_cache:
                 crows, summary = cache_arms(model, engine, s, geom, ctx, kv, threads, cell, log, total_vram, n_predict,
-                                            vram_margin_mib, collapse, cache)
+                                            vram_margin_mib, collapse, cache, ubatch=ubatch,
+                                            p3=bool(caps.get("prefill_source")))
                 rows += crows
                 searches.append(summary)
-    doc = {"marian_profile": 2, "measured_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+    doc = {"marian_profile": PROFILE_SCHEMA,
+           "measured_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
            "machine": m.to_dict(),
            "engine": {"name": engine.name, "version": engine.version(), "marian": bool(caps.get("marian")),
-                      "moe_flags": caps.get("moe_flags", [])},
+                      "prefill_source": bool(caps.get("prefill_source")), "moe_flags": caps.get("moe_flags", [])},
+           "ubatch": ubatch,
            "model": {"file": model.name, "id": sha256_head(model), **s}, "probe": {"fill": 0.75, "n_predict": n_predict},
            "rows": rows}
     if with_cache:
@@ -487,7 +608,8 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
     elif sweep.enabled:
         doc["thread_search"] = {"skipped": "--threads fixed the thread count" if threads is not None
                                 else "the processor count could not be read"}
-    out = out_dir / f"{stem}.json"
+    doc["ubatch_report"] = ubatch_report(rows)
+    out = out_dir / profile_name(stem, ubatch)
     if out.exists():                                     # a new profile replaces the old one; keep one previous copy
         out.replace(out.with_name(out.name + ".prev"))
     out.write_text(json.dumps(doc, indent=1), encoding="utf-8")

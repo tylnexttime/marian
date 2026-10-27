@@ -180,6 +180,10 @@ def describe(row: dict) -> str:
         parts.append(f"cache {c.moe_cache_mib} MiB")
     if c.miss_source:
         parts.append(f"misses from {c.miss_source}" + (f" {c.tier_mib} MiB" if c.tier_mib else ""))
+    if c.prefill_source:
+        parts.append(f"prefill from {c.prefill_source}")
+    if c.ubatch:
+        parts.append(f"ubatch {c.ubatch}")
     if c.threads:
         parts.append(f"{c.threads} threads")
     return ", ".join(parts)

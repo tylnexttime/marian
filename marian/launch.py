@@ -8,7 +8,11 @@ to calibrate first (`serve --calibrate`: one quick profile, then serve). Nothing
 (id and size), the profile is this machine's, the engine is the one profiled (name, then build: timings, the
 exactness floor and the miss sources belong to the build that was measured; the stock rollback only warns, because
 it runs plain upstream flags on whatever build is at hand), the engine has every flag the row passes, VRAM free now
-covers the row's share plus the margin, and RAM available now covers what the row pins plus the RAM floor.
+covers the row's share plus the margin, and RAM available now covers what the row pins plus the RAM floor. Two more
+since the prefill rows (after registers E51 and E54): the row was measured at the ubatch the deployment declares (a
+plan measured at one ubatch is never served at another, because the ubatch is part of the exactness reference), and
+a row with P3 prefill runs only on a build that lists `--moe-prefill-source` and only beside ring or tier misses.
+A profile of a newer schema than this version reads is refused; an older one loads, at ubatch 512.
 
 **The diagnostics bundle** (`marian diag OUT.zip`): the machine fingerprint dict and live memory readings, the
 model's profiles, the plan it would choose, the tails of the serve and profiling logs, and the Marian and engine
@@ -28,8 +32,8 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import machine, plan
-from .engines import LlamaCpp, same_build
-from .profile import sha256_head
+from .engines import DEFAULT_UBATCH, LlamaCpp, same_build
+from .profile import sha256_head, ubatch_report
 
 QUICK_CTXS = (4096, 8192, 16384, 32768, 65536, 131072, 262144)
 PROMPTY = re.compile(r'"(?:prompt|messages|content|input|text|system)"\s*:'
@@ -45,26 +49,47 @@ def quick_ctx(need: int) -> int:
     return next((c for c in QUICK_CTXS if c >= need), need)
 
 
-def gate_reason(model: Path, engine_name: str) -> str:
+def _ub_arg(ubatch: int) -> str:
+    return "" if ubatch == DEFAULT_UBATCH else f" --ubatch {ubatch}"
+
+
+def gate_reason(model: Path, engine_name: str, ubatch: int = DEFAULT_UBATCH, measured: list[int] | None = None) -> str:
+    if measured:
+        return ubatch_reason(model.name, ubatch, measured, engine_name)
     return (f"no calibration for {model.name} with {engine_name} on this machine (fingerprint "
             f"{machine.detect().fingerprint()}): every machine runs its pre-tuning tests before serving. Run "
-            f"`marian calibrate {model.name} --engine PATH` first, or `marian serve ... --calibrate` to calibrate and "
-            "then serve")
+            f"`marian calibrate {model.name} --engine PATH{_ub_arg(ubatch)}` first, or `marian serve ... --calibrate` "
+            "to calibrate and then serve")
+
+
+def ubatch_reason(model_name: str, ubatch: int, measured: list[int], engine_name: str | None = None) -> str:
+    """Why a deployment at one ubatch is refused rows measured at another."""
+    at = ", ".join(str(u) for u in measured)
+    who = f" with {engine_name}" if engine_name else ""
+    return (f"ubatch: this deployment declares ubatch {ubatch}, and {model_name}{who} was calibrated on this machine "
+            f"at ubatch {at} only. A ubatch is part of the exactness reference (register E54: exact against all-VRAM "
+            f"at the same ubatch, not at another), so a plan measured at one ubatch is never served at another. Run "
+            f"`marian calibrate {model_name} --engine PATH{_ub_arg(ubatch)}`, or serve with "
+            + " or ".join(f"--ubatch {u}" for u in measured))
 
 
 def explain(rows: list[dict], need: int, objective: str, model_name: str, *, free: int | None, margin: int,
-            exact_only: bool, stock: bool, ram_free: int | None, ram_floor: int) -> str:
+            exact_only: bool, stock: bool, ram_free: int | None, ram_floor: int, ubatch: int = DEFAULT_UBATCH) -> str:
     """Why choose() found nothing, from the widest question to the narrowest."""
     if not rows:
         return f"no profile for {model_name} on this machine; run `marian profile` (or `marian calibrate`) first"
-    if plan.choose(rows, need, objective) is None:
+    if not any(plan.ubatch_of(r) == ubatch for r in rows):
+        return ubatch_reason(model_name, ubatch, plan.ubatches(rows))
+    rows = [r for r in rows if plan.ubatch_of(r) == ubatch]
+    if plan.choose(rows, need, objective, ubatch=ubatch) is None:
         return (f"no measured configuration fits {need} tokens on this machine for {model_name}; "
                 "run `marian profile` with a larger --ctx first")
     kinds = [k for k, on in (("exact-class", exact_only), ("stock", stock)) if on]
-    if kinds and plan.choose(rows, need, objective, exact_only=exact_only, stock=stock) is None:
+    if kinds and plan.choose(rows, need, objective, exact_only=exact_only, stock=stock, ubatch=ubatch) is None:
         return (f"no {' and '.join(kinds)} configuration fits {need} tokens for {model_name}: the profile has rows "
                 "that fit, but none of that class")
-    if free is not None and plan.choose(rows, need, objective, free, margin, exact_only=exact_only, stock=stock) is None:
+    if free is not None and plan.choose(rows, need, objective, free, margin, exact_only=exact_only, stock=stock,
+                                        ubatch=ubatch) is None:
         return (f"measured configurations fit {need} tokens, but none fits the {free} MiB of VRAM free now "
                 f"with a {margin} MiB margin")
     return (f"the configurations that fit {need} tokens pin more host memory than the {ram_free} MiB available now "
@@ -73,9 +98,17 @@ def explain(rows: list[dict], need: int, objective: str, model_name: str, *, fre
 
 def check(row: dict, doc: dict, model: Path, model_id: str, engine, *, stock: bool = False,
           vram_free_mib: int | None = None, margin_mib: int = 300, ram_free_mib: int | None = None,
-          ram_floor_mib: int = 6144) -> tuple[list[str], list[str]]:
+          ram_floor_mib: int = 6144, ubatch: int = DEFAULT_UBATCH) -> tuple[list[str], list[str]]:
     """(reasons not to launch, warnings) for this row of this profile document."""
     reasons, warnings = [], []
+    why = plan.schema_problem(doc)
+    if why:
+        reasons.append(why)
+    measured = plan.ubatch_of(dict(row, _ubatch=plan.doc_ubatch(doc)))
+    if measured != ubatch:
+        reasons.append(f"ubatch: the row was measured at ubatch {measured} and this deployment declares {ubatch}; a "
+                       "plan measured at one ubatch is never served at another (the ubatch is part of the exactness "
+                       f"reference, register E54); calibrate at {ubatch} or declare {measured}")
     pm = doc.get("model") or {}
     if pm.get("id") != model_id:
         reasons.append(f"model identity: the profile is for model id {pm.get('id')} ({pm.get('file')}), "
@@ -97,8 +130,18 @@ def check(row: dict, doc: dict, model: Path, model_id: str, engine, *, stock: bo
                 warnings.append(msg + "; the stock rows use plain upstream flags, their speeds may differ on this build")
             else:
                 reasons.append(msg + "; calibrate again (`marian calibrate`) or serve the stock rows (--stock)")
-    c = plan.to_config(row)
+    c = plan.to_config(dict(row, _ubatch=plan.doc_ubatch(doc)))
     caps = engine.capabilities()
+    bad = c.problem()
+    if bad:
+        reasons.append(f"configuration: {bad}")
+    if c.prefill_source is not None and caps.get("marian") and not caps.get("prefill_source"):
+        reasons.append("engine: the row passes --moe-prefill-source, which this Marian build's --help does not list "
+                       "(patch 0009); calibrate again with this build, or use a build with 0009")
+    if (isinstance(doc.get("marian_profile"), int) and doc["marian_profile"] < 3 and caps.get("prefill_source")
+            and any((r.get("miss_source") in ("ring", "tier")) for r in doc.get("rows", []))):
+        warnings.append(f"the profile is schema {doc['marian_profile']}: its ring and tier rows predate the P3 prefill "
+                        "rows, so --moe-prefill-source p3 was never measured here; `marian calibrate` measures both")
     if c.moe_cache_mib and not caps.get("moe_cache"):
         reasons.append("engine: the row uses --moe-cache-mib, which this engine's --help does not list")
     if c.marian_flags() and not caps.get("marian"):
@@ -119,6 +162,53 @@ def check(row: dict, doc: dict, model: Path, model_id: str, engine, *, stock: bo
             reasons.append(f"RAM: the row pins {pinned} MiB; {ram_free_mib} MiB available now would leave less than "
                            f"the {ram_floor_mib} MiB floor")
     return reasons, warnings
+
+
+def settings(cfg) -> dict:
+    """The two non-placement settings of a configuration, spelt out (for --dry-run, --json and diag)."""
+    return {"ubatch": cfg.n_ubatch, "ubatch_flag": cfg.ubatch is not None,
+            "prefill_source": cfg.prefill_source or "mmap", "prefill_flag": cfg.prefill_source is not None}
+
+
+def settings_line(cfg) -> str:
+    st = settings(cfg)
+    ub = (f"ubatch {st['ubatch']} (declared: -ub {st['ubatch']} -b {st['ubatch']})" if st["ubatch_flag"]
+          else f"ubatch {st['ubatch']} (the default, no flag)")
+    pf = ("prefill source p3 (--moe-prefill-source p3: large-batch misses from the ring and tier)"
+          if st["prefill_flag"] else "prefill source mmap (the default, upstream's path, no flag)")
+    return f"settings: {ub}; {pf}"
+
+
+def trade_lines(doc: dict, others: list[dict]) -> list[str]:
+    """What a calibration found at its ubatch, decode and prefill side by side per cell, with the same figures from
+    this machine's profiles at other ubatches beside them. Those were measured in another session, so the lines say
+    so: the comparison shows the trade, it does not settle it."""
+    ub = plan.doc_ubatch(doc)
+    out = []
+
+    def fmt(best: dict) -> str:
+        d, pr = best.get("best_decode"), best.get("best_prefill")
+        if not d:
+            return "no ok row"
+        return (f"best decode {d['tg_tps']} tok/s (prefill {d['pp_tps']}), "
+                f"best prefill {pr['pp_tps']} tok/s (decode {pr['tg_tps']})")
+
+    for cell in doc.get("ubatch_report") or ubatch_report(doc.get("rows", [])):   # schema 1 and 2 have none
+        out.append(f"ubatch {ub}, ctx {cell['ctx']} kv {cell['kv']}: exact-class {fmt(cell.get('exact') or {})}; "
+                   f"all rows {fmt(cell.get('all') or {})}")
+        for o in others:
+            ou = plan.doc_ubatch(o)
+            if ou == ub:
+                continue
+            twin = next((c for c in (o.get("ubatch_report") or []) if (c["ctx"], c["kv"]) == (cell["ctx"], cell["kv"])),
+                        None)
+            if twin is None:
+                twin = next((c for c in ubatch_report(o.get("rows", []))
+                             if (c["ctx"], c["kv"]) == (cell["ctx"], cell["kv"])), None)
+            if twin is not None:
+                out.append(f"  beside it, ubatch {ou} (measured {o.get('measured_utc', '?')}, another session): "
+                           f"exact-class {fmt(twin.get('exact') or {})}; all rows {fmt(twin.get('all') or {})}")
+    return out
 
 
 # --- the diagnostics bundle ---------------------------------------------------------------------------------------
@@ -199,7 +289,7 @@ def log_tail(path: Path, scrub: Scrubber, n: int = 200) -> str:
 
 
 def write_diag(out: Path, profile_dir: Path, model: Path | None, engine: LlamaCpp | None, need: int,
-               port: int = 9951) -> list[str]:
+               port: int = 9951, ubatch: int = DEFAULT_UBATCH) -> list[str]:
     named = {str(profile_dir): "<profiles>"}
     if model is not None:
         named[str(model.resolve().parent)] = "<model-dir>"
@@ -218,7 +308,7 @@ def write_diag(out: Path, profile_dir: Path, model: Path | None, engine: LlamaCp
         try:
             caps = engine.capabilities()
             ver["engine"] = {"name": engine.name, "version": engine.version(), "marian": caps.get("marian"),
-                             "moe_flags": caps.get("moe_flags")}
+                             "prefill_source": caps.get("prefill_source"), "moe_flags": caps.get("moe_flags")}
         except (OSError, ValueError) as e:
             ver["engine"] = {"name": engine.name, "error": type(e).__name__}
     files["versions.json"] = json.dumps(scrub.obj(ver), indent=1)
@@ -232,14 +322,18 @@ def write_diag(out: Path, profile_dir: Path, model: Path | None, engine: LlamaCp
                 files[f"logs/{p.stem}.server.log.tail.txt"] = tail
         rows = plan.rows_of(docs)
         vram_free = free[0] if free else None
-        row = plan.choose(rows, need, vram_free_mib=vram_free, ram_free_mib=avail)
+        row = plan.choose(rows, need, vram_free_mib=vram_free, ram_free_mib=avail, ubatch=ubatch)
         chosen = None
         if row is not None:
             cfg = plan.to_config(row)
             chosen = {"row": {k: v for k, v in row.items() if not k.startswith("_")}, "config": asdict(cfg),
                       "server_args": LlamaCpp("llama-server", port).command(Path(model.name), cfg)[1:],
-                      "exact_class": plan.exact_class(row), "stock": plan.is_stock(row), "profile_file": row["_file"]}
+                      "exact_class": plan.exact_class(row), "stock": plan.is_stock(row), "profile_file": row["_file"],
+                      **settings(cfg)}
         files["plan.json"] = json.dumps(scrub.obj({"model": model.name, "model_id": mid, "need": need,
+                                                    "ubatch": ubatch, "ubatches_measured": plan.ubatches(rows),
+                                                    "profile_schemas": sorted({d.get("marian_profile") or 1
+                                                                               for _, d in docs}),
                                                     "vram_free_mib": vram_free, "ram_available_mib": avail,
                                                     "rows_measured": len(rows), "chosen": chosen}), indent=1)
     files["logs/serve.log.tail.txt"] = log_tail(profile_dir / "serve.log", scrub)

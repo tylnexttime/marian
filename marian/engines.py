@@ -6,6 +6,17 @@ interface: command(), start(), stop(). Every server binds 127.0.0.1 only.
 A Marian build is told apart from a stock one by its `--help`, read once per engine: the fork lists the three P3
 flags (`--moe-miss-source`, `--moe-tier-mib`, `--moe-ring-mib`, patch 0003); a stock build has none of them. Upstream's
 own expert cache flag (`--moe-cache-mib`, PR #29887) is in both builds from the pin onwards, but not in older ones.
+A Marian build with patch 0009 also lists `--moe-prefill-source`; an older Marian build does not, and is still Marian.
+
+Two settings of a configuration are not placements (M1.3, decided after registers E51 and E54):
+
+- **The prefill source** (`--moe-prefill-source mmap|p3`, patch 0009). `mmap`, the default and no flag, is upstream's
+  large-batch upload, byte for byte; `p3` serves large-batch misses from the pinned ring and tier (patch 0008). Both
+  are exact, but `p3` is only valid with `--moe-miss-source ring` or `tier` (the fork refuses it otherwise), so a
+  configuration that pairs it with the memory map is refused here before any server is started.
+- **The declared ubatch** (`-ub N -b N`). A ubatch changes the compute shape, so it is part of the reference: a
+  configuration is exact against an all-VRAM run at the SAME ubatch (E54), not against one at 512. The default, 512,
+  passes no flag. It is declared by the deployment, never chosen by the planner.
 """
 from __future__ import annotations
 
@@ -23,7 +34,11 @@ TRANSIENT = ("shared object initialization failed",)   # a CUDA driver race on W
 CACHE_FLAG = "--moe-cache-mib"                                        # upstream llama.cpp (PR #29887)
 MARIAN_FLAGS = ("--moe-miss-source", "--moe-tier-mib", "--moe-ring-mib")  # Marian P3 (patch 0003), fork only
 RING_DEFAULT_MIB = 64                                                 # the fork's --moe-ring-mib default
-SOURCE_FIELDS = ("moe_cache_mib", "miss_source", "tier_mib", "ring_mib")  # recorded in a profile row when set
+PREFILL_FLAG = "--moe-prefill-source"                                 # Marian patch 0009, fork only
+PREFILL_SOURCES = ("mmap", "p3")                                      # mmap: upstream's path and the default
+P3_MISS_SOURCES = ("ring", "tier")                                    # the only miss sources p3 prefill is valid with
+DEFAULT_UBATCH = 512                                                  # llama-server's default -ub: no flag
+SOURCE_FIELDS = ("moe_cache_mib", "miss_source", "tier_mib", "ring_mib", "prefill_source")  # in a row when set
 
 
 @dataclass
@@ -43,14 +58,49 @@ class Config:
     miss_source: str | None = None    # Marian P3: mmap | ring | tier; None = the engine's default (mmap, upstream's path)
     tier_mib: int | None = None       # Marian P3: pinned RAM tier for miss_source tier
     ring_mib: int | None = None       # Marian P3: pinned staging ring; None = the fork's default (64 MiB)
+    prefill_source: str | None = None  # Marian 0009: p3 | None = mmap (the default, upstream's path, no flag)
+    ubatch: int | None = None         # the declared -ub (and -b); None = 512, the default, no flag
     extra: list[str] = field(default_factory=list)
 
+    def __post_init__(self):
+        self.normalise()
+
+    def normalise(self) -> "Config":
+        """The defaults are spelt one way only, so two rows that launch the same server have the same key: prefill
+        source `mmap` is None (no flag), ubatch 512 is None (no flag)."""
+        if self.prefill_source == "mmap":
+            self.prefill_source = None
+        if self.ubatch == DEFAULT_UBATCH:
+            self.ubatch = None
+        return self
+
+    @property
+    def n_ubatch(self) -> int:
+        """The ubatch the server runs at: the declared one, else llama-server's default."""
+        return self.ubatch or DEFAULT_UBATCH
+
+    def problem(self) -> str | None:
+        """Why this configuration must not be launched, or None. P3 prefill reads misses from the ring or the tier,
+        so it is meaningless (and refused by the fork) beside memory-mapped misses."""
+        if self.prefill_source is not None and self.prefill_source not in PREFILL_SOURCES:
+            return f"unknown prefill source {self.prefill_source!r} (one of {', '.join(PREFILL_SOURCES)})"
+        if self.prefill_source == "p3" and self.miss_source not in P3_MISS_SOURCES:
+            return (f"--moe-prefill-source p3 needs --moe-miss-source ring or tier, not "
+                    f"{self.miss_source or 'mmap (the default)'}: P3 prefill reads misses from the ring and the tier")
+        if self.ubatch is not None and self.ubatch < 1:
+            return f"ubatch {self.ubatch} is not a positive token count"
+        return None
+
     def key(self) -> str:
-        return json.dumps(self.__dict__, sort_keys=True)
+        """A comparable string of the launch configuration. The two settings added for M1.3's prefill rows are left
+        out at their defaults, so a key recorded before them (a `confirmed` record's `by`) still matches its row."""
+        d = {k: v for k, v in self.__dict__.items() if not (k in ("prefill_source", "ubatch") and v is None)}
+        return json.dumps(d, sort_keys=True)
 
     def marian_flags(self) -> list[str]:
         """The Marian-only flags this configuration passes; empty means a stock llama.cpp can run it."""
-        return [f for f, v in zip(MARIAN_FLAGS, (self.miss_source, self.tier_mib, self.ring_mib)) if v is not None]
+        flags = [f for f, v in zip(MARIAN_FLAGS, (self.miss_source, self.tier_mib, self.ring_mib)) if v is not None]
+        return flags + ([PREFILL_FLAG] if self.prefill_source is not None else [])
 
     def pinned_mib(self) -> int:
         """Host memory the fork pins for this configuration (the desktop cannot page it): ring, plus tier."""
@@ -81,6 +131,8 @@ class Config:
         r["threads"] = self.threads
         r["load_mode"] = self.load_mode
         r.update({k: getattr(self, k) for k in SOURCE_FIELDS if getattr(self, k) is not None})
+        if self.ubatch is not None:
+            r["ubatch"] = self.ubatch
         return r
 
     @classmethod
@@ -93,10 +145,10 @@ class Config:
             c.n_gpu_layers = row["n_gpu_layers"]
         if row.get("load_mode"):
             c.load_mode = row["load_mode"]
-        for k in SOURCE_FIELDS:
+        for k in SOURCE_FIELDS + ("ubatch",):
             if row.get(k) is not None:
                 setattr(c, k, row[k])
-        return c
+        return c.normalise()
 
 
 def parse_help(text: str) -> dict:
@@ -112,6 +164,7 @@ def parse_help(text: str) -> dict:
     if not flags:                                           # an unfamiliar layout: any long flag anywhere
         flags = set(re.findall(r"(?<![\w-])--[a-z0-9][a-z0-9-]*", text))
     return {"moe_cache": CACHE_FLAG in flags, "marian": all(f in flags for f in MARIAN_FLAGS),
+            "prefill_source": PREFILL_FLAG in flags,
             "moe_flags": sorted(f for f in flags if f.startswith("--moe-")), "flags": sorted(flags)}
 
 
@@ -162,6 +215,9 @@ class LlamaCpp:
         return self._caps
 
     def command(self, model: Path, c: Config) -> list[str]:
+        why = c.problem()
+        if why:
+            raise ValueError(why)
         cmd = [str(self.exe), "-m", str(model), "-c", str(c.ctx), "-np", "1", "-ngl", str(c.n_gpu_layers),
                "-fa", c.flash_attn, "-lm", c.load_mode, "-ctk", c.cache_type, "-ctv", c.cache_type,
                "--host", "127.0.0.1", "--port", str(self.port)]
@@ -177,6 +233,10 @@ class LlamaCpp:
             cmd += ["--moe-tier-mib", str(c.tier_mib)]
         if c.ring_mib is not None:
             cmd += ["--moe-ring-mib", str(c.ring_mib)]
+        if c.prefill_source is not None:
+            cmd += [PREFILL_FLAG, c.prefill_source]
+        if c.ubatch is not None:
+            cmd += ["-ub", str(c.ubatch), "-b", str(c.ubatch)]
         return cmd + c.extra + self.server_extra
 
     def start(self, model: Path, c: Config, log: Path, timeout: float = 900, attempts: int = 3) -> tuple[bool, str]:

@@ -322,7 +322,7 @@ class CacheArms(unittest.TestCase):
         self.assertTrue(all(r["moe_cache_mib"] == cell["best_mib"] and r["status"] == "ok" for r in source))
         self.assertEqual(source[1]["pinned_mib"], round(60.5 + tiers[0]))
         self.assertTrue(doc["engine"]["marian"])
-        self.assertEqual((doc["marian_profile"], walk[0]["ram_free_before_mib"]), (2, 16000))
+        self.assertEqual((doc["marian_profile"], walk[0]["ram_free_before_mib"]), (3, 16000))
         best = plan.choose(plan.rows_of([(Path("p.json"), doc)]), 3000)
         self.assertEqual((best["miss_source"], best["tier_mib"]), ("tier", max(tiers)))
 
@@ -409,7 +409,7 @@ class Serve(unittest.TestCase):
     def test_serve_calibrate_runs_the_quick_profile_then_serves(self):
         calls = []
 
-        def fake_run(model, eng, ctxs, kvs, step, threads, out_dir, n_predict, cache=None):
+        def fake_run(model, eng, ctxs, kvs, step, threads, out_dir, n_predict, cache=None, **kw):
             calls.append((ctxs, kvs, n_predict))
             fp, mid = machine.detect().fingerprint(), sha256_head(model)
             d = json.loads(json.dumps(self.DOC))
