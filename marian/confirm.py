@@ -6,10 +6,11 @@ checks keep the plan honest:
 
 1. **The live check** (every `marian serve`, passive): the front proxy reads the decode timings llama-server returns
    with every answer. After the first N answers of at least 16 generated tokens it compares their all-tokens decode
-   rate with the row's profiled rate; more than X % below (default 15 %) and it says so in one line. The profile
-   measures decode at 75 % of the context, and most live requests decode at a shallower depth, which is not slower,
-   so a live rate below the profile is a real warning, not an artefact of depth. The outcome is recorded in the row as
-   `live_check`.
+   rate with the row's profiled rate; more than X % below (default 15 %) and it says "below profile" in one line.
+   The profile measures decode at 75 % of the context, and most live requests decode at a shallower depth, which is
+   not slower, so the gap is not an artefact of depth. But serve's request loop ran 10-16 % under calibrate's figure
+   on a clean machine (register E53), so a gap of that size is expected and is not flagged as slow. The outcome is
+   recorded in the row as `live_check`.
 2. **Keep-if-faster** (`marian serve --confirm`): before serving, the plan (A) and the runner-up (B: the next best
    row under the same filters) run K rounds of interleaved windows, A B then B A (ABBA, so neither arm always goes
    first; design 9.3), each window a fresh server start, a short warm-up and the same short probe. The runner-up

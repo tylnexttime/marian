@@ -19,8 +19,9 @@ Marian has two layers.
    not one whole layer at a time**, and fetches the rest from system RAM or the SSD as fast as the machine allows. It
    builds on upstream llama.cpp's own expert cache (`--moe-cache-mib`). It is **exact by default**: speed-ups that can
    change an answer will only ever be opt-in switches. Self-calibration to the machine at hand is the design goal;
-   calibration v1 (milestone M1.3) is built in Python and tested offline. Parts of it have run on one machine only,
-   and its memory governor has never yet met a real competing allocation; learned counts are not built.
+   calibration v1 (milestone M1.3) is built in Python and tested offline. Parts of it have run on one machine only;
+   its memory governor has met a real competing allocation once (register E53), which changed its default to
+   watch-only. Learned counts are not built.
 
 **Minimum spec we are designing for:** 32 GB of RAM plus a GPU with 8 GB of VRAM (a project decision of
 22/10/2026). The design is in [docs/design/DESIGN-M1.md](docs/design/DESIGN-M1.md).
@@ -91,7 +92,7 @@ These are why a measuring tool matters. Sources and conditions for every figure 
 | Exactness floor (per-group slot floor, refusal below it) | Marian | built, passed its test |
 | P3 miss source (`--moe-miss-source mmap\|ring\|tier`, `--moe-tier-mib`, `--moe-ring-mib`) | Marian | built, measured, opt-in (default stays `mmap`) |
 | Calibration v1, Python side (M1.3): cache arms in the profiler (VRAM cliff finder, ring and tier ladder inside a RAM envelope), exact-class per row, calibration gate, launch checks, `serve --stock` rollback, `marian diag` | Marian | built, offline tests pass; one smoke run on one machine |
-| Calibration v1, serving side (M1.3): CPU thread sweep, live check and `serve --confirm` (keep-if-faster A/B), front proxy (one sequence, 503 with a reason, streaming pass-through), memory governor with supervised restart, prompt-prefix reuse off by default (register test E52) | Marian | built 27/10/2026, offline tests pass (fake engine and server); see Limitations for what has run live |
+| Calibration v1, serving side (M1.3): CPU thread sweep, live check and `serve --confirm` (keep-if-faster A/B), front proxy (one sequence, 503 with a reason, streaming pass-through), memory governor (watch by default; restart on a measured slowdown, opt-in), prompt-prefix reuse off by default (register test E52) | Marian | built 27/10/2026, offline tests pass (fake engine and server); see Limitations for what has run live |
 | Learned counts (rest of M1.3); ranked core, warm start, TinyLFU doorkeeper in VRAM (P2), drain removal, prefetch | Marian | designed, not built |
 
 The patches are in [docs/m1.0/patches](docs/m1.0/patches) (P0) and [docs/m1.1/patches](docs/m1.1/patches) (0001
@@ -199,13 +200,22 @@ Be warned; this is research code.
   in one round (15.1 tok/s warm, 12.6 after a 16K prompt, against 14.4-14.6 and 13.4-13.7 at the old pin). Three of
   those commits change the Swift model's numerics, so Swift's texts differ from the runs at `a37cc461`; measurements
   dated before 27/10/2026 were taken at the old pin.
-- **Calibration v1's serving side is tested offline only.** The memory governor, the supervised restart, the front
-  proxy, the live check, `--confirm` and the CPU thread sweep (all built 27/10/2026) have run against a fake engine,
-  a fake llama-server, fake memory readings and a fake clock (30 tests; five deliberately broken versions of the code
-  each fail at least one of them). None has yet met a real competing allocation, a real paging cliff or a real
-  thread ladder on the GPU. Memory is read through `nvidia-smi`. The DXGI budget the design asks for turned out to be
-  per-process (it does not see another program's VRAM), so it is not used. `--confirm` runs 4 rounds with a fresh server per window, far fewer than the 64 windows
-  of Strata's rule it follows, so it can only catch large differences.
+- **The memory governor only watches by default.** A live test (register E53) found that restarting on a memory
+  reading cost more than the pressure did: a plain llama-server slowed by at most about 4% with 150 MiB of VRAM or
+  under 1 GiB of RAM left, while the old governor moved to a 9.5-11.7 tok/s row for about 240 s and never stepped
+  back up. So `--governor watch` (the default) warns on low VRAM or RAM and pauses admission only on low commit
+  headroom; `--governor restart` (opt-in) restarts only on a measured slowdown and steps back up, and has run offline
+  only. E53 did not reproduce the paging cliff at its depth of pressure, so no mode has met one yet.
+- **Calibration v1's serving side has run live once, in part.** E53 ran the front proxy, the live check and the
+  old governor on the reference laptop: every answer, across two restarts, was token- and log-probability-identical
+  to all-VRAM, and every refusal was a 503 with a reason. `--confirm`, the CPU thread sweep (both built 27/10/2026)
+  and the governor's new `restart` mode have run only against a fake engine, a fake llama-server, fake memory
+  readings and a fake clock (41 tests in `tests/test_serve.py`; 17 deliberately broken versions of the governor and
+  the live check each fail at least one of them). The thread ladder has not run on the GPU. The live check compares with the profile, and serve's own loop ran 10-16% under calibrate's figure on a
+  clean machine (E53), so it reports "below profile" rather than "slow". Memory is read through `nvidia-smi`. The
+  DXGI budget the design asks for turned out to be per-process (it does not see another program's VRAM), so it is
+  not used. `--confirm` runs 4 rounds with a fresh server per window, far fewer than the 64 windows of Strata's rule
+  it follows, so it can only catch large differences.
 - **Calibration v1 measures, then trusts its measurement.** The planner restores cache budgets, miss sources, tier
   sizes and thread counts into the launch configuration, and `serve` checks the chosen row against the VRAM and RAM
   free at launch. The cliff finder assumes decode speed rises with the cache budget until the cliff. The cache arms
@@ -346,14 +356,23 @@ the memory peaks, design item C-23); past that it answers HTTP 503 with `Retry-A
 through as they arrive, streamed ones included.
 
 A **memory governor** reads free VRAM, available RAM and commit headroom every 2 s, against the floors the launch check
-used. If one is crossed it pauses admission at once (503, reason `memory_pressure`) and lets the running request
-finish. If the pressure lasts 10 s, it restarts llama-server on the next smaller measured configuration that fits,
-and says why in one line. An exact configuration is only replaced by an exact one unless `--allow-non-exact` is
-given. After three restarts, or when nothing smaller fits, it stops with the reason rather than let the machine page
-(upstream allocates the expert cache once, so a running server cannot shrink it; design item C-02).
+used. It has three modes (`--governor`):
 
-The proxy reads the timings of the first 8 answers and says so when live decode is more than 15% below the profiled
-rate. `--confirm` goes further before serving: the plan and the runner-up (the next best configuration of the same
+- `watch` (the default): each crossing is one warning line with the live decode rate. Only low commit headroom
+  pauses admission (503, reason `memory_pressure`), because below it allocations fail; the running request finishes.
+  Low VRAM or RAM only warns. Nothing restarts on a reading.
+- `restart` (opt-in): if decode stays under 70% of the configuration's own baseline (the median of its first 8
+  answers) for 10 s while a memory floor is crossed, it restarts llama-server on the next smaller measured
+  configuration that fits, and says why in one line. An exact configuration is only replaced by an exact one unless
+  `--allow-non-exact` is given. When memory has fitted the planned configuration again for 60 s (`--step-up`), and
+  no request is queued, it steps back up. After three restarts (step-ups count), or when nothing smaller fits, it
+  stops with the reason (upstream allocates the expert cache once, so a running server cannot shrink it; design item
+  C-02).
+- `off`: no governor.
+
+The proxy reads the timings of the first 8 answers and says "below profile" when live decode is more than 15% under
+the profiled rate (serve's loop runs somewhat under calibrate's figure, so this is a note, not a fault). `--confirm`
+goes further before serving: the plan and the runner-up (the next best configuration of the same
 exactness) run four interleaved rounds of short windows, and the runner-up replaces the plan only if it wins at least
 3 of 4 rounds by a median of more than 2% (after Strata's keep-if-faster rule). The outcome is written into the
 profile, and the planner prefers the winner from then on.
@@ -378,8 +397,8 @@ pinning and RAM-safety rules; then the 8 GB laptop under RAM pressure. The miles
   invariance test.
 - **M1.3:** calibration v1. Built (Python): the VRAM cliff finder, miss sources in a RAM safety envelope, the CPU
   thread sweep, the plan, the calibration gate, launch checks, the `--stock` rollback, the diagnostics bundle, live
-  confirmation, and serving through a proxy with a memory governor and supervised restart. Still to do: learned
-  counts, E52's registered run, the governor against a real competing allocation, and the Windows pinning rules
+  confirmation, and serving through a proxy with a memory governor (watch by default since register E53). Still to
+  do: learned counts, E52's registered run, a live run of the governor's `restart` mode, and the Windows pinning rules
   (pin in chunks, all-or-none tier copy) in the fork.
 - **M1.4:** real hardware: a real 8 GB GPU, Linux, a slower link and drive.
 - **M2:** the full expert source (prefill included), removing the per-layer drain, look-ahead prefetch.

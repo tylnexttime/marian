@@ -57,10 +57,16 @@ Built from the design, plus safety and method rules other projects paid for:
   against the runner-up of the same exactness; the runner-up wins only with 3 of 4 rounds and a median above +2%.
   The outcome is written into the profile.
 - **Serving envelope and memory governor** (design 7.7 after C-02, 7.8 after C-23), built 27/10: a front proxy runs
-  one request at a time with one queued, answers 503 with a reason, and streams; the governor pauses admission when
-  free VRAM, available RAM or commit headroom cross the launch floors, and after 10 s restarts llama-server on the
-  next smaller measured row (exact stays exact), giving up after 3 restarts. Tested offline against a fake server
-  and fake readings; **not yet run against a real competing allocation** (the M1.3 exit asks for exactly that).
+  one request at a time with one queued, answers 503 with a reason, and streams. **The governor's default changed
+  after its first live run (register E53, 27/10).** With a VRAM hog leaving 150 MiB free, then a RAM hog leaving
+  under 1 GiB available, a plain llama-server slowed by at most about 4%. The old governor paused, restarted on a
+  smaller row (9.5-11.7 tok/s, from 71-76) for about 240 s, and never stepped back up, though 11 GiB of VRAM was
+  free again. Answers stayed exact across its restarts. Now `--governor watch` (default) reads the same floors, warns
+  with the live decode rate, and pauses admission only on low commit headroom (the crash risk); it never restarts
+  on a reading. `--governor restart` (opt-in) restarts on the next smaller row only when decode stays under 70% of
+  the row's own baseline (the median of its first 8 answers) for 10 s while a floor is crossed, and steps back up
+  after 60 s of memory that fits the planned row, never with a queue; step-ups count against the 3 restarts.
+  `--governor off` runs none. The new modes are tested offline only.
 - **Fixed-prefix KV reuse for the gate**: a gate re-reads the same instructions every time. Strata v0.2.3 reused 91%
   of a shared prompt (*theirs*). Plumbed (`--cache-prompt on`, `--gate-prefix FILE`), **off by default** until test
   E52 shows it exact. E52's registered run is still to be made (the GPU was held past its 90-minute wait); its
@@ -159,4 +165,6 @@ gate should use a model whose licence fits the deploying organisation.
 | 8 | Linux paths never run; one machine only | M1.4 |
 | 9 | Swift's publisher missing from the thanks | fixed 27/10 (UkisAI) |
 | 10 | E52 (prefix-reuse exactness) registered run not made | to run when the GPU is free; client and inputs are ready (outside this repository) |
-| 11 | Governor, `--confirm` and thread sweep tested offline only | a live competing-allocation test is the M1.3 exit |
+| 11 | Governor, `--confirm` and thread sweep tested offline only | governor run live once (E53, 27/10): restarting on a memory reading did harm, so the default is now `watch`; `--governor restart` (slowdown trigger, step-up), `--confirm` and the thread sweep are still offline only |
+| 12 | Serve's request loop decodes 10-16% under calibrate's figure for the same row on a clean machine (E53) | not investigated; the live check now says "below profile", and the restart trigger uses the row's own measured baseline, not the profile |
+| 13 | E53's paging-cliff scenario (a model loaded beyond VRAM) was not reproduced by pressure on a running server | a launch-time event, guarded by the launch checks against the VRAM and RAM free at launch; the governor does not cover it |
