@@ -561,8 +561,8 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
     passed stock's default.
   - Prefix reuse is not exact, so it stays off in exact mode (E52).
 - **Prefill, next:**
-  - a same-session decode check, T8 at ubatch 512 against 2048, before any claim that the larger ubatch costs
-    decode;
+  - done the same day (E56, A31): the ubatch's decode cost, measured in one session, is +6% warm and -6% after a
+    16K prompt, with prefill about 3x;
   - sizing the compute buffer for a large ubatch without shrinking the cache's share;
   - calibration rows that measure the prefill source and a declared ubatch;
   - then fewer bytes per prompt: layer-major prefill, prefetching the next layer's experts while this one computes,
@@ -617,6 +617,7 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 | 27/10 | prediction: P3 prefill about 3x at 16K, "about 60%" on the 2x clause (E51) | 1.76x, so wrong on the size and on the pass; it had assumed reads near the drive's peak and a larger tier share, and the drive bounds it |
 | 27/10 | E53's shared-GPU-memory clause: an absolute 256 MiB limit with no baseline (an instrument-design fault of Claude Tyl's; the worker flagged the risk before the run) | every all-VRAM server reads about 854 MiB from load, so the clause could not pass and its escape could not trigger; the FAIL kept as written; E55 to measure a rise over the arm's own baseline |
 | 27/10 | prediction: under E53's VRAM hog the plain server would page and halve its decode | it kept 96-97% of it; the governor's restart cost more than the pressure, so the default became `watch` |
+| 27/10 | prediction: a larger ubatch costs nothing in decode, "free" at about 65% (E56) | a trade: +6% warm, -6% after a 16K prompt; the reasons held (the machine was slower, hit rate unchanged), the conclusion did not |
 | 27/10 | prediction: a larger ubatch leaves decode unaffected (E54) | decode 16-18% under E51's figures on the registered comparison, a fail; the comparison crosses sessions, so the cause is open until a same-session run at 512 |
 
 ---
@@ -1396,3 +1397,26 @@ context, not an answer-changing switch. With it, the tier's 16K prefill passed s
 registered decode clause failed (0.837 and 0.816), and we had predicted decode unaffected; whether the ubatch or the
 machine caused the drop needs a same-session run at 512. Until then the default stays 512, and the ubatch becomes a
 declared profile parameter.
+
+#### A31. E56: the ubatch's decode cost, measured in one session
+
+Conditions: Swift 1.5 IQ2_XS, build-p4 (0007-0009), cache 9,400 MiB, tier 6 GiB, `--moe-prefill-source p3`; T8
+(`-ub 512 -b 2048`) and T8-U (`-ub 2048 -b 2048`) in four interleaved rounds on the afternoon of 27/10, E44's request
+sequence, fresh process per run; both arms at `-lv 4`, which prints the compute-buffer sizes. Rule registered first.
+
+| Measure (median of four rounds) | T8 (512) | T8-U (2048) | Ratio |
+|---|---|---|---|
+| Warm decode, tok/s | 11.87 | 12.63 | 1.064 (T8-U faster in 4 of 4 rounds) |
+| Decode after a 16K prompt | 11.82 | 11.12 | 0.941 |
+| 4K prefill | 46.4 | 140.0 | 3.0 |
+| 16K prefill | 51.7 | 154.5 | 3.0 |
+| GPU compute buffer, MiB | 351 | 728 | |
+
+Hit rate 0.906 in every run of both arms; each arm's records equal its earlier runs' (E51's T8, E54's T8-U). The
+post-16K figure rests on two requests a run (the third post prompt ends after one token).
+
+Taught us: the rule called it a trade (the post-16K clause missed 0.95 by a hair), and it is one: about 3x prefill
+and +6% warm decode, against -6% after a long prompt, which the 377 MiB larger compute buffer probably explains. E54's
+16-18% decode gap was the machine: the same T8 configuration decoded at 11.87 that afternoon against 15.15 that
+morning. We had predicted "free" at about 65%; the reasons held, the conclusion did not. A gate declares 2048; the
+default stays 512.

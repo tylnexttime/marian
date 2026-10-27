@@ -62,8 +62,8 @@ These are why a measuring tool matters. Sources and conditions for every figure 
   than upstream's cache path), because prefill reads through the memory map and the pinned tier takes the page cache
   it needs. Two opt-in, exact changes measured on 27/10/2026 close that gap on this laptop: prefill misses through P3
   (16K prefill 35 -> 61 tok/s) and, on top of it, a declared ubatch of 2048 (157 tok/s at 16K, against 142 for stock
-  at its default ubatch in the same session). Decode in that session ran 16-18% under the earlier session's figures,
-  and the cause is not yet separated (see Limitations).
+  at its default ubatch in the same session). A same-session check (register E56) put the ubatch's decode cost at
+  +6% warm and -6% after a 16K prompt, so the earlier session's 16-18% decode gap was the machine, not the ubatch.
 - **The practical question we were asked** (can that 8 GB / 32 GB laptop, with most of its RAM in use, run a 4-30B
   model at 20 to 30 tok/s?) **was answered yes by stock llama.cpp with good offload settings, not by Marian's cache**:
   Gemma 4 26B-A4B at IQ3_XXS with `-ncmoe 18` ran at 26.3 tok/s, and small dense models that fit in VRAM ran at
@@ -203,10 +203,9 @@ Be warned; this is research code.
   deployment that declares 2048 gets answers identical to an all-VRAM run at 2048, not to one at 512. Speed on Swift
   with the tier and P3 prefill (three rounds): 16K prefill 156.7 tok/s against stock's 142.4 at its default ubatch,
   4K prefill 138.3 against 97.1, decode 12.67 against 10.57, and 11.47 against 4.61 after a 16K prompt. Decode was
-  16-18% under the earlier session's figures (15.15 and 14.07), which failed that test's decode bound. That
-  comparison crosses sessions: stock ran about 10% slower in the same session, the hit rate was unchanged, and the
-  2,048-row compute buffer takes about 300 MiB more VRAM. Until a same-session run at 512 settles it, the default
-  stays at 512. The ubatch is a declared profile parameter (`--ubatch`, see How serving works), tested offline
+  16-18% under the earlier session's figures (15.15 and 14.07), which failed that test's decode bound. A same-session check (E56, four interleaved rounds) then measured the ubatch's own decode cost: warm decode +6% at 2048 (12.63 against 11.87, faster in 4 of 4 rounds), decode after a 16K prompt -6% (11.12 against 11.82, from two requests a run), prefill about 3x. The earlier session's 16-18% gap was the machine, not the ubatch.
+  The 2,048-row compute buffer takes 377 MiB more VRAM (728 against 351 MiB), the likely cost after a long prompt.
+  The default stays at 512; a gate declares 2048. The ubatch is a declared profile parameter (`--ubatch`, see How serving works), tested offline
   only. Stock at
   `-ub 2048` reached 279.6 tok/s at 16K (one run), but stock changes answers.
 - **The pinned tier competes with the desktop.** It takes RAM the OS and other programs cannot page; pinning can fail
