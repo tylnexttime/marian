@@ -19,7 +19,7 @@ and an NVMe model drive (`docs/design/RESEARCH-PACK.md`).
 **Where the numbers come from.** Files in this repository are cited by path. The result tables are copied into the
 repository as `docs/m1.0/*-summary.md`, `docs/m1.1/*-summary.md` (the gate pair on the M1.1 build is
 `docs/m1.1/gate11-summary.md`), `docs/m1.2/results/` and `docs/m1.1/probe/*.txt`, so a citation such as `m1.1/p3-summary.md` means
-`docs/m1.1/p3-summary.md`. Register entries (E34 to E52) are in the project's private test register; every number they
+`docs/m1.1/p3-summary.md`. Register entries (E34 to E54) are in the project's private test register; every number they
 carry is also in a table here. Raw per-request logs and traces stay in the research workspace. Anything not verified is
 marked.
 
@@ -444,14 +444,24 @@ what prediction could buy, offline, on traces we already had (`marian predict`).
   pages were faulting in one by one under memory pressure: 4 KiB at a time, the slowest way to read an SSD.
 - **Our prediction** (pollution, about 55%) was wrong. The fix the data points at was already being built (point 8).
 
-**8. Prefill through P3 (E51, running as this is written).** Two fork patches:
-- **Chunked pinning:** pin the tier in chunks under a RAM cap. Windows quietly falls back to slow pageable memory when
-  one large pin fails.
-- **Large-batch misses through P3:** serve them through the unbuffered ring and the pinned tier instead of memory-map
-  faults.
+**8. Prefill through P3 (E51, A27).** Two fork patches:
+- **Chunked pinning (0007):** pin the tier in chunks under a RAM cap. Windows quietly falls back to slow pageable
+  memory when one large pin fails.
+- **Large-batch misses through P3 (0008):** serve them through the unbuffered ring and the pinned tier instead of
+  memory-map faults.
 - **The pass rule:** at least twice the 16K prefill speed, decode within 5%, and answers unchanged.
-
-The result goes in A27.
+- **The result: a FAIL on the speed clause, and a useful one.** 16K prefill went from 34.7 to 61.1 tok/s, 1.76x, not
+  2x. Decode did not suffer, and the answers did not change: Gemma's tier arm matched all-VRAM on every top-3
+  log-probability, and every Swift cache run matched every other. We had predicted about 3x.
+- **Why it fell short, measured:** the drive. A 16K prompt uploads 509 GiB of experts, because each 512-token ubatch
+  re-reads most of each layer's experts. The tier held 13.8% of those bytes, and the rest came off the SSD at about
+  1.95 GB/s. A faster source cannot fix that; fewer bytes per prompt can.
+- **What shipped:** the rule had no branch for "speed fails, decode and exactness pass", so the call was made
+  outside it, and logged as such. 0007 goes into the default build: it is a safety patch with no measured cost, though its cap never triggered.
+  0008 ships opt-in, behind a new switch, `--moe-prefill-source mmap|p3` (patch 0009, default `mmap`, the old path
+  byte for byte), because on Gemma, whose file sits in the page cache, P3 prefill was slower than the memory map.
+- **A side result we labelled too quickly:** one run at `-ub 2048` reached stock's 16K prefill (176.8 tok/s). Its
+  text differed from the default ubatch's, so we called it class A. Point 13 corrects that.
 
 **9. Calibration v1 (M1.3) becomes code.**
 - **Calibration:** `marian calibrate` measures a machine before anything is served: cache arms with a VRAM-cliff
@@ -464,23 +474,76 @@ The result goes in A27.
   - **Memory governor:** pauses admission under pressure and restarts on the next smaller measured row, keeping an
     exact plan exact.
   - **Rollback:** `--stock`.
-- **Tests:** 118, all offline. The governor has not yet faced a real competing allocation, and that is M1.3's exit.
+- **Tests:** 118, all offline. The governor had not yet faced a real competing allocation, and that is M1.3's exit
+  (point 12).
 
-**10. Is reusing a prompt prefix exact? (E52, registered, not yet run).**
+**10. Is reusing a prompt prefix exact? (E52, A28). No.**
 - **Why it matters:** a gate re-reads the same instructions on every call, so reusing their KV would turn most of its
   prefill into a lookup.
 - **Why it may not be exact:** the reused KV was computed in a different batch split.
-- **Where it stands:** the registered run is waiting behind E51 for the GPU. An uncounted instrument check already
-  found 0 of 3 reused answers identical to their fresh twins, so prefix reuse ships **off** in `serve` until E52 says
-  otherwise.
-- **The client path was fixed first:** the check also found that on Gemma 4 (sliding-window attention) whether
-  llama-server reuses a prefix at all depends on the endpoint. So the registered run's client path was fixed before
-  it runs, and the register says it was fixed after the check.
+- **The client path was fixed first:** an uncounted instrument check found that on Gemma 4 (sliding-window
+  attention) whether llama-server reuses a prefix at all depends on the endpoint. So the registered run's client path
+  was fixed before it ran, and the register says it was fixed after the check. That check had also found 0 of 3
+  reused answers identical to their fresh twins, so prefix reuse already shipped **off** in `serve`.
+- **The result:** none of the 10 reused answers matched its fresh twin, all-VRAM or with the cache and tier.
+  Log-probabilities moved by 1.08 to 4.66, and half the answers changed tokens. The reuse was real (only the
+  document's tokens were evaluated), and a fresh prompt run twice matched exactly, so the difference is the reuse.
+  We predicted "not exact in at least one pair" (about 60%); it was 20 of 20.
+- **What it settled:** prefix reuse is class A. It stays off in exact mode, as an opt-in switch. It would have saved
+  83% of prompt tokens, so the gate's prefill gain has to come from somewhere else (point 13).
+- **A side result worth keeping:** the cache-and-tier arm matched all-VRAM on all 68 requests, reused prefixes
+  included. The miss path is exact; the reuse is not.
 
 **11. A mistake about time.** Three pre-registration stamps in the register were written as guessed clock times, not
 read from the clock, and they fell after the work had begun. The E47 worker noticed its own entry was stamped too
 late. The stamps were corrected from file evidence, and a rule was added: read the clock before stamping. A
 pre-registration is worth only as much as its timestamp.
+
+**12. The governor meets a real competitor (E53, A29), and makes things worse.** M1.3's exit was the memory governor
+surviving a real competing allocation. Gemma 4 26B served through `marian serve` for 600 s while a VRAM hog took all
+but 150 MiB of the GPU, and later a RAM hog pushed available RAM 2 GiB under the row's floor. A plain llama-server ran
+the same schedule as the contrast.
+- **What held, in two full runs:** every answer, across two restarts on three different rows, was token- and
+  log-probability-identical to all-VRAM at the same context (409 of 409). Every refusal was a 503 with a reason, and
+  answers resumed within 22-37 s of each crossing.
+- **What failed, as written:** the clause that the server's shared GPU memory never exceeds 256 MiB. Every all-VRAM
+  llama-server reads about 854 MiB there from the moment its model loads, on a quiet machine, the contrast included.
+  The clause was an absolute threshold with no baseline, so it could never pass, and its "could not fail" escape
+  could never trigger. That was a design fault of ours; the worker had flagged the risk before the run. The FAIL
+  stands as written: it is not re-read after seeing the data.
+- **The finding that matters:** the plain server never slowed by more than about 4%, even with 150 MiB of VRAM or
+  under 1 GiB of RAM left. Marian's governor restarted onto a smaller row at 9.5-11.7 tok/s, about 240 s in all, and
+  never stepped back up when the hog left and 11 GiB of VRAM was free again. We had predicted the contrast would page
+  and halve its decode; it kept 96-97% of it.
+- **What changed:** the M1.3 exit is not met. The governor now only watches by default: it warns, and pauses
+  admission only when commit headroom crosses its floor. Restarting is opt-in, triggered by a measured slowdown
+  rather than a memory reading, and it steps back up. A new test (E55), with the shared-memory clause defined as a
+  rise above the arm's own baseline, is to be registered before any rerun, and will say that definition was written
+  after seeing E53's data.
+- **Not validated:** the paging cliff of 21/10 (42.7 -> 5.5 tok/s) happened when a model was loaded beyond VRAM. A
+  competitor arriving after load is a different event, and on this driver it was mild.
+
+**13. A larger ubatch, judged against the right reference (E54, A30).** E51 showed that prefill is bound by bytes
+per prompt, and its one `-ub 2048` run reached stock's speed. We had called that class A because its text differed
+from the default ubatch's. But that compared two different compute shapes. Marian's promise is exactness against an
+all-VRAM run *with the same settings*, as E53 had just ruled for the context size. So E54 asked the right question:
+at `-ub 2048`, does the cache path equal all-VRAM at `-ub 2048`?
+- **Exactness: yes.** On ten prompts of 2,009-2,406 tokens, the cache arm with memory-mapped misses and the tier
+  arm with P3 prefill both matched all-VRAM at 2048 on every token and every top-3 log-probability. All-VRAM at the
+  default 512 differed from all-VRAM at 2048 (up to 0.668 on the chosen token, 7 of 10 texts), so the check could
+  fail. A larger ubatch is class E relative to a reference at the same ubatch. That corrects the morning's decision
+  to call it class A.
+- **Prefill: level with stock and past it.** With the tier and P3 prefill, Swift's 16K prefill was 156.7 tok/s
+  against stock's 142.4 at its default ubatch (three rounds), 2.56x E51's 61.1.
+- **Decode: a fail on the registered comparison, cause not established.** Warm decode was 12.67 tok/s and 11.47
+  after a 16K prompt, 0.837 and 0.816 of E51's figures, under the 0.95 bound. We had predicted decode unaffected.
+  But E51's figures came from another session. Stock also ran about 10% slower in this one, the hit rate was the
+  same as E51's, host time per token rose and the drive read slower, and E51's one run at 2048 decoded at 14.9. Only
+  a same-session run at 512 can separate the machine from the ubatch, and the protocol did not include one.
+- **What it settled:** the ubatch becomes a declared profile parameter, default 512. A deployment that declares
+  2048 gets answers identical to all-VRAM at 2048. For a gate (long prompt, short answer), that row beat default
+  stock on 16K and 4K prefill, warm decode and decode after 16K, exactly, which makes it the likely contender for the
+  8 GB milestone.
 
 ## 7. What is next
 
@@ -492,17 +555,25 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
   - The predictability bounds (E47).
   - The prefill diagnosis (E49).
   - Calibration v1's Python side and the serving rules (M1.3, tested offline).
-- **Prefill is the main target.**
-  - E51 routes large-batch misses through P3.
-  - Then: prefetch the next layer's experts while this one computes; pinning the mapped expert ranges as a measured
-    arm (upstream #31122); layer-major prefill.
-- **M1.3's exit:**
-  - the governor against a real competing allocation;
-  - learned counts;
-  - the pinning rules in the fork, which E51 starts.
-- **E52** decides whether a gate's fixed prefix may be reused in exact mode.
+  - Prefill misses through P3, exact, shipped opt-in (E51: +76% at 16K), and the tier's pinning rules in the fork
+    (0007).
+  - A declared ubatch is exact against a reference at the same ubatch (E54), and with it the tier's 16K prefill
+    passed stock's default.
+  - Prefix reuse is not exact, so it stays off in exact mode (E52).
+- **Prefill, next:**
+  - a same-session decode check, T8 at ubatch 512 against 2048, before any claim that the larger ubatch costs
+    decode;
+  - sizing the compute buffer for a large ubatch without shrinking the cache's share;
+  - calibration rows that measure the prefill source and a declared ubatch;
+  - then fewer bytes per prompt: layer-major prefill, prefetching the next layer's experts while this one computes,
+    and pinning the mapped expert ranges as a measured arm (upstream #31122).
+- **M1.3's exit, not met (E53):**
+  - E55, the governor's opt-in `restart` mode against a real competitor, with the shared-memory clause measured
+    against the arm's own baseline;
+  - a test that makes 0007's tier cap trigger;
+  - learned counts.
 - **The 8 GB milestone (E50)** runs once the prefill track lands. Its rule is already written, and so is our
-  prediction that today's code fails it.
+  prediction that the code as it stood that morning fails it. A declared-ubatch row is reported beside it.
 - **Exactness, the rest of the way:**
   - the single-layer harness (E0);
   - the kernel-boundary parity matrix;
@@ -542,6 +613,11 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 | 27/10 | the first roadmap offered a fix for the embedding table's page granularity before checking whether upstream already prefetches its rows | corrected the same morning; E49 then ruled the table out |
 | 27/10 | prediction: "the embedding table crowds the experts out" (E49, about 55%) | wrong: it held under 0.5 GiB; the cost is single-page expert faults |
 | 27/10 | E47's frequency-prior check failed the 2x bar its worker declared | judged not voiding (the ids reproduce exactly, and the null differs); the flat prior is reported as a finding |
+| 27/10 | a larger ubatch called class A "until shown otherwise" because it changes the compute shape; E51 then labelled its `-ub 2048` run that way because its text differed from the default ubatch's | the wrong reference: E54 compared it with all-VRAM at the same ubatch and found it class E, a declared setting (section 6c, point 13) |
+| 27/10 | prediction: P3 prefill about 3x at 16K, "about 60%" on the 2x clause (E51) | 1.76x, so wrong on the size and on the pass; it had assumed reads near the drive's peak and a larger tier share, and the drive bounds it |
+| 27/10 | E53's shared-GPU-memory clause: an absolute 256 MiB limit with no baseline (an instrument-design fault of Claude Tyl's; the worker flagged the risk before the run) | every all-VRAM server reads about 854 MiB from load, so the clause could not pass and its escape could not trigger; the FAIL kept as written; E55 to measure a rise over the arm's own baseline |
+| 27/10 | prediction: under E53's VRAM hog the plain server would page and halve its decode | it kept 96-97% of it; the governor's restart cost more than the pressure, so the default became `watch` |
+| 27/10 | prediction: a larger ubatch leaves decode unaffected (E54) | decode 16-18% under E51's figures on the registered comparison, a fail; the comparison crosses sessions, so the cause is open until a same-session run at 512 |
 
 ---
 
@@ -1180,6 +1256,143 @@ Taught us: the embedding table is not the cause (at most 0.48 GiB in any arm, at
 and the prefill pays for it in single-page faults. The fix is to give prefill misses the same unbuffered and pinned
 sources decode already has (E51).
 
-#### A27. E51: prefill through P3 (placeholder: running)
+#### A27. E51: prefill through P3
 
-#### A28. E52: is prefix reuse exact? (placeholder: registered, waiting for the GPU)
+Conditions: the rebased build plus patches 0007 (tier safety) and 0008 (prefill source). Swift 1.5 IQ2_XS on the
+reference laptop, E44's request sequence and rate definitions, cache 9,400 MiB. Arms: T, the 6 GiB tier on the
+rebased build without the new patches; T8, T plus 0007 and 0008; R8, the ring only plus 0008; S, stock `-ncmoe 34`.
+Three interleaved rounds (T T8 R8 S, rotated), a fresh process per run. T8u (T8 at `-ub 2048`) ran once after round
+3, reported only. Gemma 4 26B-A4B IQ4_XS: E45's exactness check on the same build. The rule was registered before any
+code was written: T8's 16K prefill at least 2x T's, T8's decode within 5% of T's or better, answers unchanged.
+
+| Swift, median of three rounds (tok/s) | Prefill 16K | Prefill 4K | Decode, all tokens | After a 16K prompt, all tokens |
+|---|---|---|---|---|
+| T (tier, memory-mapped prefill) | 34.7 | 27.1 | 14.80 | 13.17 |
+| **T8 (tier, P3 prefill)** | **61.1** | 56.6 | **15.15** | **14.07** |
+| R8 (ring, P3 prefill) | 54.7 | 51.1 | 12.5 | 11.2 |
+| S (stock) | 174.2 | 110.8 | 11.9 | 10.0 |
+| T8u (`-ub 2048`, one run, reported) | 176.8 | 159.2 | 14.9 | 13.2 |
+
+| Clause | Result | Verdict |
+|---|---|---|
+| T8's 16K prefill at least 2x T's | 1.76x (rounds 1.53, 1.85, 1.74; T8 60.6-61.3, T 33.2-40.0) | **fail** |
+| T8's decode within 5% of T's or better | 1.024 warm, 1.068 after a 16K prompt | pass |
+| Answers unchanged | Swift: T, T8 and R8 identical on all 9 runs, largest difference 0. Gemma's tier arm with 0008 against all-VRAM: 10/10 texts and top-3 log-probabilities, largest difference 0 over 1,280 tokens. Stock contrast: 0.59 | pass |
+| Stretch: T8 at stock's prefill | 0.35x | not met |
+
+Where the 16K prefill went, from the traces: every cache arm uploads about 509 GiB of experts per 16K prompt through the
+selective copies. T8 spent 281 of its 319 s inside them, with the tier supplying 13.8% of the bytes and the rest read
+unbuffered from the SSD at about 1.95 GB/s (T, through memory-map faults: 1.30 GB/s; T8u: 173 GiB at 2.11 GB/s). A
+verify run compared every one of about 600,000 uploads with the memory map: no difference. Single runs, not in the
+rule: Gemma's 5,428-token prompt ran at 3,626 tok/s all-VRAM, 573 with memory-mapped misses, 260 with T8, 193 with R8
+and 680 stock; its 13 GB file stays in the page cache, where unbuffered reads are slower than page faults. T8's
+lowest free RAM was 0.3-1.4 GiB, against about 0.03 GiB for T.
+
+Taught us: prefill through P3 is exact and 76% faster at 16K, and decode does not pay for it, but it is bound by the
+drive, because each 512-token ubatch re-reads most of each layer's experts. The next lever is fewer bytes per prompt
+(a larger ubatch, layer-major prefill), not a faster source. Two checks could not fail: 0007's cap and its
+failed-chunk branch never triggered, and on Swift only one decode prompt is long enough to take 0008's path. 0008's
+exactness rests on Gemma, the verify run and the CPU self-tests. 0008 is opt-in (`--moe-prefill-source p3`, patch
+0009) because of Gemma's result.
+
+#### A28. E52: is prefix reuse exact?
+
+Conditions: the rebased build (no prefill patches). Gemma 4 26B-A4B IQ4_XS, `-c 16384`, two arms: A all-VRAM, and T
+cache 2,500 MiB with a 4 GiB tier. A fixed instruction block (1,608 tokens; 1,616 with the chat template) and ten
+invented documents of 206-599 tokens, each answered with 64 greedy tokens and 3 log-probabilities per token. F: fresh,
+with prompt caching off. R: reused, after a different document had primed the same block. Registered client path
+`/completion` with the templated text, the shortest other document as the primer, thinking off; the chat endpoint was
+also run and reported. An A-A control (two fresh runs) and a contrast (one character changed in the block).
+
+| Arm, path | Pairs identical in tokens | Pairs with largest difference 0 | Largest difference, chosen / any top-3 | Reuse real | A-A control | Prompt-time speed-up |
+|---|---|---|---|---|---|---|
+| A, `/completion` (registered) | 5 of 10 | **0 of 10** | 1.29 / 4.66 | 10 of 10 | identical | 2.84x |
+| T, `/completion` (registered) | 5 of 10 | **0 of 10** | 1.29 / 4.66 | 10 of 10 | identical | 3.82x |
+| A, chat endpoint (reported) | 6 of 10 | 0 of 10 | 0.95 / 2.34 | 10 of 10 | identical | 3.14x |
+| T, chat endpoint (reported) | 6 of 10 | 0 of 10 | 0.95 / 2.34 | 10 of 10 | identical | 4.26x |
+
+The smallest per-pair largest difference was 1.08. Each reused request evaluated exactly its document's tokens (1,616
+reused), so 82.7% of prompt tokens were saved. The contrast re-evaluated all 1,962 tokens and differed (1.73). Every
+divergence came at token 11 or later, so the one-word verdict was the same in all 40 pairs, but the stated reason
+changed in some. Across arms, T gave exactly A's tokens and log-probabilities on all 68 requests.
+
+Taught us: a reused prefix does not give the fresh answer, so prefix reuse is class A, off in exact mode, and an
+opt-in switch. The miss path, by contrast, stayed exact even with reuse. Our prediction (not exact in at least one
+pair, about 60%) was right and too timid: 20 of 20. The likely mechanism, a different batch split for the reused KV,
+fits what we saw but was not isolated.
+
+#### A29. E53: the governor under a real competing allocation
+
+Conditions: Marian's serving code at the time (governor restarting on memory floors), the rebased build, Gemma 4
+26B-A4B IQ4_XS, a profile from `marian calibrate`, `serve` with its defaults and `--need 4096`. One client looped over
+E45's 10 decode prompts (128 greedy tokens, 3 log-probabilities) for 600 s. P0 (0-120 s) clean; P1 (120-240 s) a VRAM
+hog leaving 150 MiB free; R1 (240-360 s) released; P2 (360-480 s) a RAM hog pushing available RAM 2 GiB under the
+row's 3,240 MiB floor; P3 (480-600 s) clean. A once-per-second monitor read free VRAM, available RAM, commit headroom
+and the server's shared GPU memory. Contrast: plain llama-server on the same starting row, no proxy, no governor. Two
+full runs; answers judged against all-VRAM at the same context.
+
+| Clause | Run 1 | Run 2 |
+|---|---|---|
+| Every answer identical to all-VRAM | 200 of 200, largest difference 0, three rows | 209 of 209, largest difference 0 |
+| Refusals only as a 503 with a reason; nothing open over 300 s | 14 refusals; longest request 17.6 s | 17 refusals; longest 14.0 s |
+| Answers resume within the bound after each crossing; nothing in P0 | resumed after 37 s and 26 s | resumed after 31 s and 22 s |
+| Shared GPU memory at most 256 MiB while serving | **854-918 MiB: fail** | **854 MiB: fail** |
+
+| Median decode by phase (tok/s) | P0 | P1 | R1 | P2 | P3 |
+|---|---|---|---|---|---|
+| Marian, run 1 | 71.2 | 9.5 | 11.6 | 73.9 | 75.5 |
+| Marian, run 2 | 76.3 | 11.7 | 11.5 | 76.6 | 76.5 |
+| Contrast, run 1 | 77.2 | 74.8 | 76.8 | 75.3 | 76.9 |
+| Contrast, run 2 | 79.2 | 76.0 | 76.6 | 76.3 | 75.8 |
+
+In P1 the governor paused within about a second of the crossing and restarted on a smaller cache row (`-ncmoe 30`,
+866 MiB cache). It stayed there through R1, with 11 GiB of VRAM free, until P2's RAM pressure forced a second restart,
+which happened to choose all-VRAM again. The contrast lost 64-208 MiB of VRAM to shared memory in P1, at no measurable
+cost, and kept running with 0.7-1.0 GiB of RAM available in P2.
+
+Taught us: the governor kept answers exact and refused cleanly, but on this machine restarting on a memory reading
+cost far more than the pressure it guarded against, and with no step-up it never recovered. So the default became
+`watch`, and restarting became opt-in, on a measured slowdown, with a step-up. The shared-memory clause measured the
+counter's floor, not paging: every all-VRAM server sits near 854 MiB from load. It needed a baseline. The 21/10 paging
+cliff was not reproduced: it came from loading a model beyond VRAM, not from a competitor arriving later.
+
+#### A30. E54: a declared ubatch
+
+Conditions: the rebased build plus patches 0007-0009. All arms at `-ub 2048 -b 2048` unless named. Gemma 4 26B-A4B
+IQ4_XS, `-c 16384`: ten public-domain passages of 2,009-2,406 tokens, so the ubatch size matters (each runs in two
+ubatches at 2048, in four or five at 512), 64 greedy tokens, 3 log-probabilities. F-U all-VRAM; M-U cache 2,500 MiB with
+memory-mapped misses; T8-U cache plus a 4 GiB tier with `--moe-prefill-source p3`; F-U2 = F-U again. Contrast: F-512,
+all-VRAM at the default ubatch. Swift 1.5 IQ2_XS: three interleaved rounds of T8-U (E51's T8 at `-ub 2048`) against
+S (stock `-ncmoe 34` at its default ubatch), E44's sequence; R8-U and stock at `-ub 2048` once each afterwards. The
+decode clause was ruled one-sided before any run (at least 0.95 of E51's T8).
+
+| Gemma, against F-U | Texts | Top-3 log-probabilities | Largest difference, chosen / any top-3 |
+|---|---|---|---|
+| M-U (memory-mapped misses) | 10/10 | 10/10 | 0 / 0 |
+| T8-U (tier, P3 prefill) | 10/10 | 10/10 | 0 / 0 |
+| F-U2 (the reference again) | 10/10 | 10/10 | 0 / 0 |
+| F-512 (contrast) | 3/10 | 0/10 | 0.668 / 12.0 |
+
+| Swift, median of three rounds (tok/s) | T8-U | S, default ubatch | E51's T8, default ubatch, earlier session |
+|---|---|---|---|
+| Prefill 16K | **156.7** | 142.4 | 61.1 |
+| Prefill 4K | 138.3 | 97.1 | 56.6 |
+| Decode, all tokens | 12.67 | 10.57 | 15.15 |
+| After a 16K prompt, all tokens | 11.47 | 4.61 | 14.07 |
+
+Reported once each: R8-U 151.1 / 135.2 / 10.0 / 9.2; stock at `-ub 2048` 279.6 / 123.3 / 8.8 / 10.7 (and stock
+changes answers). T8-U really used P3 in prefill (24,724 tier and 45,229 ring uploads on Gemma) and saw ubatches of
+2,044 tokens. Swift's T8-U rounds and R8-U agreed exactly. Patch 0009's own checks passed: with the default `mmap`, 0
+P3 uploads over 1,102 large copies; with `p3` set through the environment, 4,392; `p3` without a ring or tier refused. Gemma's prefill on these
+prompts: 4,564 tok/s all-VRAM, 1,209 with memory-mapped misses, 660 with the tier and P3.
+
+The decode comparison crosses sessions. In this one, stock's decode was 10.57 against 11.9 in E51 and its 16K
+prefill 142 against 174; T8-U's hit rate equalled E51's (0.906) while host time per token rose from 36-38 ms to
+44-46 ms and the drive read at about 790 against 1,370 MB/s; and E51's one `-ub 2048` run decoded at 14.9. The
+2,048-row compute buffer also took about 300 MiB more VRAM (peak 15,294 against 14,992 MiB) beside the same cache.
+
+Taught us: a larger ubatch is exact against all-VRAM at the same ubatch, so it is a declared setting, like the
+context, not an answer-changing switch. With it, the tier's 16K prefill passed stock's default, exactly. The
+registered decode clause failed (0.837 and 0.816), and we had predicted decode unaffected; whether the ubatch or the
+machine caused the drop needs a same-session run at 512. Until then the default stays 512, and the ubatch becomes a
+declared profile parameter.
