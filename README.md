@@ -16,7 +16,7 @@ Marian has two layers.
 1. **M0, a measuring tool** (Python, standard library only). It measures how a model behaves on *this* machine:
    speed and memory for each context size, KV-cache type and GPU/CPU split. Then it picks the fastest configuration
    that fits a request and launches it. It never extrapolates: if nothing measured fits, it says so.
-2. **M1, a thin fork of llama.cpp** (pinned at upstream commit [`63b4b303`](https://github.com/ggml-org/llama.cpp/commit/63b4b303)). Mixture-of-experts (MoE) models only use a
+2. **M1, a thin fork of llama.cpp** (pinned at upstream commit [`338fce651`](https://github.com/ggml-org/llama.cpp/commit/338fce651), release b11936). Mixture-of-experts (MoE) models only use a
    few of their "experts" for each token. M1 keeps the most-used experts in GPU memory (VRAM) **one expert at a time,
    not one whole layer at a time**, and fetches the rest from system RAM or the SSD as fast as the machine allows. It
    builds on upstream llama.cpp's own expert cache (`--moe-cache-mib`). It is **exact by default**: speed-ups that can
@@ -85,7 +85,7 @@ These are why a measuring tool matters. Sources and conditions for every figure 
  |    tier safety      the pinned tier capped, and pinned in chunks of at most 1 GiB  |
  |    P3 prefill       large-batch misses from the same ring and tier (opt-in)        |
  +------------------------------------------------------------------------------------+
- |  upstream llama.cpp at 63b4b303: --moe-cache-mib per-expert VRAM cache (SLRU),     |
+ |  upstream llama.cpp at 338fce651: --moe-cache-mib per-expert VRAM cache (SLRU),    |
  |  MUL_MAT_ID on the cache bank, selective expert copy for large batches             |
  +------------------------------------------------------------------------------------+
 ```
@@ -109,7 +109,8 @@ These are why a measuring tool matters. Sources and conditions for every figure 
 The patches are in [docs/m1.0/patches](docs/m1.0/patches) (P0), [docs/m1.1/patches](docs/m1.1/patches) (0001
 exactness floor, 0002 fill trace, 0003 P3 minimal), [docs/m1.2/patches](docs/m1.2/patches) (0004 routing-id trace,
 0005 its review fixes) and [docs/m1.3/patches](docs/m1.3/patches) (0007 tier safety, 0008 prefill source, 0009 the
-prefill-source switch), as `git format-patch` files on top of `63b4b303`, applied in that order. There is no 0006.
+prefill-source switch), as `git format-patch` files on top of `338fce651`, applied in that order. There is no 0006.
+They also apply unchanged to `63b4b303`, the previous pin, where every measurement of 27/10/2026 was taken.
 
 ## Inspirations and prior art
 
@@ -208,6 +209,14 @@ Be warned; this is research code.
   The default stays at 512; a gate declares 2048. The ubatch is a declared profile parameter (`--ubatch`, see How serving works), tested offline
   only. Stock at
   `-ub 2048` reached 279.6 tok/s at 16K (one run), but stock changes answers.
+- **The logical batch (`-b`) is part of the reference too** (register E59, 28/10/2026). At a fixed ubatch, changing
+  only `-b` changed answers: all-VRAM at `-ub 512 -b 512` against the default `-ub 512 -b 2048` matched 0 of 10
+  records (log-probabilities moved by up to 0.603), and `-ub 2048 -b 4096` against `-ub 2048 -b 2048` 1 of 10 (0.416).
+  The cache path with the tier and P3 prefill at `-b 512` still matched all-VRAM at `-b 512` exactly. Marian already
+  passes `-ub N -b N` for a declared ubatch and nothing for the default (llama-server's `-b 2048`), so no earlier
+  exactness result is affected; every comparison was made at one (ubatch, batch) pair. Since 28/10 every profile
+  records the `-b` it ran at, and the launch checks refuse a row whose `-b` would differ (for instance if upstream
+  changed its default), and refuse `LLAMA_ARG_BATCH` or `LLAMA_ARG_UBATCH` in the environment.
 - **The pinned tier competes with the desktop.** It takes RAM the OS and other programs cannot page; pinning can fail
   (it then falls back to pageable memory and says so).
 - **The decode target is met on one machine, one model, one prompt set.** Five interleaved rounds (design 9.3) put
@@ -235,7 +244,23 @@ Be warned; this is research code.
   the Gemma cache arms are still log-probability-identical to all-VRAM, and the Swift tier still meets the decode exit
   in one round (15.1 tok/s warm, 12.6 after a 16K prompt, against 14.4-14.6 and 13.4-13.7 at the old pin). Three of
   those commits change the Swift model's numerics, so Swift's texts differ from the runs at `a37cc461`; measurements
-  dated before 27/10/2026 were taken at the old pin.
+  dated before 27/10/2026 were taken at the old pin. On 28/10/2026 it moved again, to `338fce651` (32 commits, no
+  conflict; the nine patches are byte-identical), and was re-checked (E58): every Gemma cache arm, P3 prefill
+  included, is identical to all-VRAM and to the same arm at `63b4b303`; Swift's answers did not move; and the old and
+  new builds decode at the same speed in one session (new/old 1.02 warm, 0.98 after a 16K prompt). **The decode exit
+  was not re-met that morning:** both builds ran at 11.6-11.9 tok/s warm and 11.1-11.3 after a 16K prompt, under the
+  12.0 exit, because this laptop has run about 20% slower since the middle of 27/10/2026 (see the next item).
+- **The reference laptop's speed moved by about 20%, and the cause is narrowed, not named** (dev-debt row 17). The
+  Swift tier decoded 15.1-15.2 tok/s on the morning of 27/10/2026 and 11.6-13.0 from that afternoon on, through a
+  reboot. Register E60 ran that morning's own binary with that morning's own arguments beside today's build: 0.96x,
+  so no code change caused it. In the slower runs the GPU side and the host side slowed together, with the same bytes
+  moved and the same CPU and GPU utilisation; one 2x slump (7.8 against 16.5 tok/s, stock) came with the CPU held
+  below its base clock. GPU logs since 28/10 show the GPU idling between bursts at 800-1,200 MHz during decode, so the
+  platform's power state is the leading suspect. Since 28/10 every registered speed run first runs
+  `tools/prerun/prerun_check.py` (power plan and source, thermal limits, CPU and drive probes, GPU clocks, power
+  limit and clock-event reasons, free memory, the busiest processes) and logs GPU clocks beside the run; comparisons
+  that matter are made inside one session, interleaved. Figures from different sessions in this README can differ
+  by this much for reasons that are not the code.
 - **The memory governor only watches by default.** A live test (register E53) found that restarting on a memory
   reading cost more than the pressure did: a plain llama-server slowed by at most about 4% with 150 MiB of VRAM or
   under 1 GiB of RAM left, while the old governor moved to a 9.5-11.7 tok/s row for about 240 s and never stepped
@@ -339,6 +364,7 @@ python -m marian machine                                   # GPU, VRAM, RAM, dri
 python -m marian inspect model.gguf                        # architecture, layers, experts, MoE or dense
 python -m marian calibrate model.gguf --engine path/to/llama-server     # the quick profile: one context, one KV type
 python -m marian calibrate model.gguf --engine path/to/llama-server --ubatch 2048   # ... for a deployment that declares -ub 2048
+python -m marian calibrate model.gguf --engine path/to/llama-server --ctx 8192 --probe-prompt 4096  # prefill probed at the deployment's 4K prompt
 python -m marian profile model.gguf --engine path/to/llama-server --ctx 4096,8192,16384 --kv f16,q8_0   # the full one
 python -m marian plan model.gguf --need 6000               # the fastest measured configuration for 6,000 tokens
 python -m marian plan model.gguf --need 6000 --fit-now --json   # ... that also fits the VRAM free right now, as JSON
@@ -398,7 +424,13 @@ planner's objective (`--objective tg` or `pp`) chooses. `p3` is never measured o
 misses, which the fork refuses. Each profile's `prefill_pairs` says what was kept and why.
 
 `--ubatch N` (default 512) measures every row at `-ub N -b N`. A ubatch is part of the exactness reference (register
-E54), so it is declared by the deployment, never picked by calibration. The profile records it (schema 3) and, at a
+E54), and so is the logical batch `-b` (E59), so it is declared by the deployment, never picked by calibration; each
+profile records both.
+
+`--probe-prompt N` sets the prefill probe's prompt length in tokens. By default the probe fills 75% of the context,
+so a calibration at 4K judged P3 prefill on about 3K tokens, while P3's gain was measured at 16K (dev-debt row 18).
+A deployment that knows its prompt length (a gate: about 4K) declares it; a prompt plus answer that does not fit the
+context is refused before any server starts, and the profile records which probe it used. The profile records it (schema 3) and, at a
 value other than 512, is written beside the default profile (`...-ub2048.json`) rather than over it. Calibration then
 prints the best decode and the best prefill of each context at that ubatch, beside the same figures from this
 machine's profiles at other ubatches, marked as another session, so the trade is visible; nothing in the code

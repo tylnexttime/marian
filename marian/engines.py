@@ -163,8 +163,9 @@ def parse_help(text: str) -> dict:
             flags.update(t.strip() for t in m.group(1).split(","))
     if not flags:                                           # an unfamiliar layout: any long flag anywhere
         flags = set(re.findall(r"(?<![\w-])--[a-z0-9][a-z0-9-]*", text))
+    m = re.search(r"--batch-size\s+N\s+.*?\(default:\s*(\d+)\)", text)
     return {"moe_cache": CACHE_FLAG in flags, "marian": all(f in flags for f in MARIAN_FLAGS),
-            "prefill_source": PREFILL_FLAG in flags,
+            "prefill_source": PREFILL_FLAG in flags, "default_batch": int(m.group(1)) if m else None,
             "moe_flags": sorted(f for f in flags if f.startswith("--moe-")), "flags": sorted(flags)}
 
 

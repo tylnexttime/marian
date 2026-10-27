@@ -70,6 +70,7 @@ import datetime as dt
 import hashlib
 import http.client
 import json
+import os
 import re
 import threading
 import time
@@ -129,7 +130,8 @@ def thread_ladder(physical: int | None, logical: int | None) -> list[int]:
 
 
 def thread_sweep(model: Path, engine, s: dict, ctx: int, kv: str, cell: list[dict], log: Path, total_vram: int,
-                 n_predict: int, margin_mib: int, ladder: list[int]) -> tuple[list[dict], dict]:
+                 n_predict: int, margin_mib: int, ladder: list[int], probe_prompt: int | None = None
+                 ) -> tuple[list[dict], dict]:
     """The ladder at the fastest CPU-computing point of one walk cell; returns its rows and a summary."""
     summary: dict = {"ctx": ctx, "kv": kv}
     cpu = [r for r in cell if r["status"] == "ok" and not r.get("exact_class")]
@@ -145,7 +147,7 @@ def thread_sweep(model: Path, engine, s: dict, ctx: int, kv: str, cell: list[dic
         c = Config.from_row(best)
         c.threads = t
         row = dict(c.to_row(), arm="threads", exact_class=c.exact_class(s["block_count"]))
-        measure(engine, model, c, row, log, n_predict)
+        measure(engine, model, c, row, log, n_predict, probe_prompt)
         judge(row, total_vram, margin_mib, 0.0, 0.6)       # VRAM only: fewer threads may rightly be slower
         rows.append(row)
         print(json.dumps(row), flush=True)
@@ -193,8 +195,20 @@ class PeakSampler(threading.Thread):
         self.join(timeout=5)
 
 
-def probe(engine: LlamaCpp, ctx: int, n_predict: int) -> dict:
-    target = int(ctx * 0.75) - n_predict
+def probe_target(ctx: int, n_predict: int, probe_prompt: int | None = None) -> int:
+    """The probe's prompt length in tokens. By default 75% of the context minus the answer (M0's choice); with
+    probe_prompt, the deployment's declared prompt length (dev-debt row 18: a 4K calibration otherwise judged P3 prefill
+    on about 3K tokens, though its gain was measured at 16K). The prompt and the answer must fit the context."""
+    if probe_prompt is None:
+        return int(ctx * 0.75) - n_predict
+    if probe_prompt < 1 or probe_prompt + n_predict > ctx:
+        raise ValueError(f"a {probe_prompt}-token probe prompt plus {n_predict} answer tokens does not fit a "
+                         f"{ctx}-token context")
+    return probe_prompt
+
+
+def probe(engine: LlamaCpp, ctx: int, n_predict: int, probe_prompt: int | None = None) -> dict:
+    target = probe_target(ctx, n_predict, probe_prompt)
     unit = engine.tokenize(FILLER)
     text = FILLER * max(1, target // max(unit, 1))
     t = engine.complete(text, n_predict)
@@ -241,7 +255,7 @@ def _log_since(log: Path, offset: int) -> str:
         return ""
 
 
-def measure(engine, model: Path, c: Config, row: dict, log: Path, n_predict: int) -> dict:
+def measure(engine, model: Path, c: Config, row: dict, log: Path, n_predict: int, probe_prompt: int | None = None) -> dict:
     """Start one server for configuration c, probe it, stop it. Records speed, VRAM (peak, the desktop's baseline, the
     model's share), RAM (available before, lowest), commit headroom, the server's peak working set and commit, and what
     its log says; a refusal below the exactness floor becomes status `refused`, a miss source the fork did not use
@@ -258,7 +272,7 @@ def measure(engine, model: Path, c: Config, row: dict, log: Path, n_predict: int
             row.update(status="start_failed", note=why)
         else:
             try:
-                row.update(probe(engine, c.ctx, n_predict))
+                row.update(probe(engine, c.ctx, n_predict, probe_prompt))
                 row["status"] = "ok"
             except (OSError, ValueError, http.client.HTTPException) as e:   # a timeout or a dropped server is a row
                 row.update(status="probe_failed", note=PATHLIKE.sub("<path>", f"{type(e).__name__}: {e}")[:200])
@@ -430,7 +444,8 @@ def ubatch_report(rows: list[dict]) -> list[dict]:
 
 def cache_arms(model: Path, engine, s: dict, geom, ctx: int, kv: str, threads: int | None, walk_rows: list[dict],
                log: Path, total_vram: int, n_predict: int, margin_mib: int, collapse: float,
-               opt: CacheOptions, *, ubatch: int = DEFAULT_UBATCH, p3: bool = False) -> tuple[list[dict], dict]:
+               opt: CacheOptions, *, ubatch: int = DEFAULT_UBATCH, p3: bool = False,
+               probe_prompt: int | None = None) -> tuple[list[dict], dict]:
     """The cliff finder and the miss sources for one (context, KV) cell; returns its rows and a summary of the search.
     With p3 (the engine has --moe-prefill-source), every ring and tier row gets a P3-prefill twin, judged by
     prefill_pair."""
@@ -461,7 +476,7 @@ def cache_arms(model: Path, engine, s: dict, geom, ctx: int, kv: str, threads: i
         c = Config(ctx=ctx, cache_type=kv, threads=threads, n_gpu_layers=999, n_cpu_moe=n, load_mode="mmap",
                    moe_cache_mib=budget, ubatch=ubatch, **src)
         row = dict(c.to_row(), arm=arm, exact_class=c.exact_class(n))
-        measure(engine, model, c, row, log, n_predict)
+        measure(engine, model, c, row, log, n_predict, probe_prompt)
         judge(row, total_vram, margin_mib, 0.0, collapse)            # VRAM near full; speed is judged by the caller
         rows.append(row)
         print(json.dumps(row), flush=True)
@@ -532,6 +547,24 @@ def _capabilities(engine) -> dict:
         return {}
 
 
+BATCH_ENV = ("LLAMA_ARG_BATCH", "LLAMA_ARG_UBATCH")
+
+
+def logical_batch(ubatch: int, caps: dict) -> int | None:
+    """The logical batch (-b) the server runs at: N for a declared ubatch N (-ub N -b N); for the default ubatch,
+    llama-server's own default as its --help states it (None if unread). Register E59 (28/10/2026): at a fixed ubatch
+    the logical batch changes answers too, so it is part of the exactness reference and every profile records it."""
+    return ubatch if ubatch != DEFAULT_UBATCH else caps.get("default_batch")
+
+
+def launch_env_problem() -> str | None:
+    """llama-server reads -b and -ub from these variables too; set, they would move the reference without a flag."""
+    set_ = [k for k in BATCH_ENV if os.environ.get(k)]
+    return (f"environment: {', '.join(set_)} set; llama-server would take its batch or ubatch from it, and both are part "
+            "of the exactness reference (registers E54, E59). Unset it and declare the ubatch with --ubatch"
+            if set_ else None)
+
+
 def profile_name(stem: str, ubatch: int) -> str:
     """The profile's file name: the default ubatch keeps the name M0 used; a declared one gets its own file, so a
     deployment at 2048 does not replace the profile at 512 (each keeps one previous copy)."""
@@ -540,9 +573,12 @@ def profile_name(stem: str, ubatch: int) -> str:
 
 def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: int, threads: int | None,
         out_dir: Path, n_predict: int = 64, vram_margin_mib: int = 300, collapse: float = 0.6,
-        cache: CacheOptions | None = None, sweep: ThreadOptions | None = None, ubatch: int = DEFAULT_UBATCH) -> Path:
+        cache: CacheOptions | None = None, sweep: ThreadOptions | None = None, ubatch: int = DEFAULT_UBATCH,
+        probe_prompt: int | None = None) -> Path:
     if ubatch < 1:
         raise ValueError(f"ubatch {ubatch} is not a positive token count")
+    for ctx in ctxs:                                      # refuse before any server starts, not halfway through
+        probe_target(ctx, n_predict, probe_prompt)
     cache = cache or CacheOptions()
     cache.n_ubatch = ubatch                               # the exactness floor is computed at the declared ubatch
     sweep = sweep or ThreadOptions()
@@ -550,6 +586,9 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
     m = machine.detect()
     total_vram = m.gpus[0].vram_mib if m.gpus else 0
     caps = _capabilities(engine)
+    why = launch_env_problem()
+    if why:
+        raise ValueError(why)
     with_cache = bool(cache.enabled and s["moe"] and caps.get("marian"))
     geom = model_geometry(model) if with_cache else None
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -569,7 +608,7 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
                 else:
                     c.n_gpu_layers = k
                 row = dict(c.to_row(), arm="walk", exact_class=c.exact_class(s["block_count"]))
-                measure(engine, model, c, row, log, n_predict)
+                measure(engine, model, c, row, log, n_predict, probe_prompt)
                 judge(row, total_vram, vram_margin_mib, best, collapse)
                 best = max(best, row["tg_tps"]) if row["status"] == "ok" else best
                 cell.append(row)
@@ -580,13 +619,13 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
             rows += cell
             if ladder:
                 trows, tsum = thread_sweep(model, engine, s, ctx, kv, cell, log, total_vram, n_predict,
-                                           vram_margin_mib, ladder)
+                                           vram_margin_mib, ladder, probe_prompt)
                 rows += trows
                 sweeps.append(tsum)
             if with_cache:
                 crows, summary = cache_arms(model, engine, s, geom, ctx, kv, threads, cell, log, total_vram, n_predict,
                                             vram_margin_mib, collapse, cache, ubatch=ubatch,
-                                            p3=bool(caps.get("prefill_source")))
+                                            p3=bool(caps.get("prefill_source")), probe_prompt=probe_prompt)
                 rows += crows
                 searches.append(summary)
     doc = {"marian_profile": PROFILE_SCHEMA,
@@ -595,7 +634,9 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
            "engine": {"name": engine.name, "version": engine.version(), "marian": bool(caps.get("marian")),
                       "prefill_source": bool(caps.get("prefill_source")), "moe_flags": caps.get("moe_flags", [])},
            "ubatch": ubatch,
-           "model": {"file": model.name, "id": sha256_head(model), **s}, "probe": {"fill": 0.75, "n_predict": n_predict},
+           "batch": logical_batch(ubatch, caps),
+           "model": {"file": model.name, "id": sha256_head(model), **s}, "probe": ({"fill": 0.75, "n_predict": n_predict} if probe_prompt is None else
+                     {"prompt_tokens": probe_prompt, "n_predict": n_predict}),
            "rows": rows}
     if with_cache:
         doc["cache_search"] = {"ram_floor_mib": cache.ram_floor_mib, "resolution_mib": cache.resolution_mib,

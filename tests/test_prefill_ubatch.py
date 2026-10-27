@@ -47,14 +47,15 @@ class PrefillFake(m13.FakeMarian):
         return t
 
 
-def run_profile(eng, ram_available=16000, ubatch=512, **opt):
+def run_profile(eng, ram_available=16000, ubatch=512, probe_prompt=None, **opt):
     """profile.run on the toy MoE with the fake engine; returns (document, profile file name)."""
     with tempfile.TemporaryDirectory() as d, m13.fake_machine(eng, ram_available), \
             mock.patch.object(profile, "model_geometry", lambda m: object()), \
             mock.patch.object(profile.geometry, "floor_mib", lambda g, n=512: 500), \
             mock.patch.object(profile.geometry, "full_mib", lambda g, n=512: 12000):
         out = profile.run(m13.toy_moe(Path(d)), eng, [4096], ["f16"], 2, None, Path(d) / "profiles", 16,
-                          cache=CacheOptions(**opt), sweep=ThreadOptions(enabled=False), ubatch=ubatch)
+                          cache=CacheOptions(**opt), sweep=ThreadOptions(enabled=False), ubatch=ubatch,
+                          probe_prompt=probe_prompt)
         return json.loads(out.read_text(encoding="utf-8")), out.name
 
 
@@ -262,7 +263,8 @@ class DeclaredUbatch(unittest.TestCase):
     def test_calibrate_and_serve_calibrate_pass_the_declared_ubatch(self):
         calls = []
 
-        def fake_run(model, eng, ctxs, kvs, step, threads, out_dir, n_predict, cache=None, sweep=None, ubatch=512):
+        def fake_run(model, eng, ctxs, kvs, step, threads, out_dir, n_predict, cache=None, sweep=None, ubatch=512,
+                     probe_prompt=None):
             calls.append(ubatch)
             fp, mid = machine.detect().fingerprint(), sha256_head(model)
             d = json.loads(json.dumps(DOC_2048))
@@ -289,6 +291,55 @@ class DeclaredUbatch(unittest.TestCase):
         lines = launch.trade_lines(d2048, [d512])
         self.assertTrue(lines[0].startswith("ubatch 2048, ctx 4096 kv f16: exact-class best decode 38.0 tok/s"))
         self.assertIn("beside it, ubatch 512 (measured earlier, another session)", lines[1])
+
+
+class ProbeFake(PrefillFake):
+    """Records each probe's prompt length in tokens (the fake tokenizes one filler unit as 30 tokens)."""
+
+    def __init__(self):
+        super().__init__()
+        self.prompts = []
+
+    def complete(self, text, n):
+        self.prompts.append(text.count(profile.FILLER) * self.tokenize(profile.FILLER))
+        return super().complete(text, n)
+
+
+class ProbeLength(unittest.TestCase):
+    """Dev-debt row 18: calibration probes prefill at the deployment's declared prompt length, not 75% of the context."""
+
+    def test_default_probe_fills_three_quarters_of_the_context(self):
+        eng = ProbeFake()
+        doc, _ = run_profile(eng)
+        self.assertTrue(eng.prompts)
+        self.assertEqual(set(eng.prompts), {(int(4096 * 0.75) - 16) // 30 * 30})
+        self.assertEqual(doc["probe"], {"fill": 0.75, "n_predict": 16})
+
+    def test_declared_probe_prompt_is_used_by_every_row(self):
+        eng = ProbeFake()
+        doc, _ = run_profile(eng, probe_prompt=2048)
+        self.assertGreater(len(eng.prompts), 3)                       # walk, cache and source rows alike
+        self.assertEqual(set(eng.prompts), {2048 // 30 * 30})
+        self.assertEqual(doc["probe"], {"prompt_tokens": 2048, "n_predict": 16})
+
+    def test_a_probe_that_does_not_fit_the_context_is_refused_before_any_server(self):
+        eng = ProbeFake()
+        with self.assertRaises(ValueError):
+            run_profile(eng, probe_prompt=4090)                       # 4090 + 16 answer tokens > 4096
+        self.assertEqual(eng.started, [])
+
+    def test_calibrate_passes_the_declared_probe_prompt(self):
+        seen = []
+
+        def fake_run(*a, probe_prompt=None, **k):
+            seen.append(probe_prompt)
+            raise SystemExit(0)
+
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(cli.profile, "run", fake_run):
+            for extra in ([], ["--probe-prompt", "4096"]):
+                with self.assertRaises(SystemExit):
+                    run_cli(Path(d), "calibrate", "--engine", "x", *extra)
+        self.assertEqual(seen, [None, 4096])
 
 
 class UbatchRefusal(unittest.TestCase):

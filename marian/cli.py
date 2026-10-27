@@ -195,13 +195,14 @@ def main(argv=None) -> int:
         eng = LlamaCpp(a.engine, a.port)
         out = profile.run(a.model, eng, [int(x) for x in a.ctx.split(",")], a.kv.split(","), a.step, a.threads,
                           PROFILES, a.n_predict, cache=_cache_opts(a), sweep=ThreadOptions(enabled=not a.no_thread_sweep),
-                          ubatch=a.ubatch)
+                          ubatch=a.ubatch, probe_prompt=a.probe_prompt)
         print(f"profile written: {out}")
         _report_trade(out)
     elif a.cmd == "calibrate":
         eng = LlamaCpp(a.engine, a.port)
         out = profile.run(a.model, eng, [a.ctx], [a.kv], a.step, a.threads, PROFILES, a.n_predict, cache=_cache_opts(a),
-                          sweep=ThreadOptions(enabled=not a.no_thread_sweep), ubatch=a.ubatch)
+                          sweep=ThreadOptions(enabled=not a.no_thread_sweep), ubatch=a.ubatch,
+                          probe_prompt=a.probe_prompt)
         print(f"calibration written: {out}")
         _report_trade(out)
     elif a.cmd == "diag":
@@ -221,6 +222,8 @@ def _cache_args(p, tier_steps: int) -> None:
     p.add_argument("--ubatch", type=int, default=DEFAULT_UBATCH, metavar="N",
                    help="the deployment's declared ubatch: every row is measured at -ub N -b N (512: no flag)")
     p.add_argument("--no-thread-sweep", action="store_true", help="no CPU thread ladder for rows that compute on the CPU")
+    p.add_argument("--probe-prompt", type=int, metavar="TOKENS",
+                   help="probe prefill at the deployment's prompt length (default: 75%% of the context)")
 
 
 def _report_trade(out: Path) -> None:

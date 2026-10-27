@@ -625,6 +625,13 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 | 27/10 | prediction: a larger ubatch costs nothing in decode, "free" at about 65% (E56) | a trade: +6% warm, -6% after a 16K prompt; the reasons held (the machine was slower, hit rate unchanged), the conclusion did not |
 | 27/10 | prediction: a larger ubatch leaves decode unaffected (E54) | decode 16-18% under E51's figures on the registered comparison, a fail; the comparison crosses sessions, so the cause is open until a same-session run at 512 |
 
+| 27/10-28/10 | row 17 compared "the same T8 configuration" across sessions, but not the same binary: the fast morning runs used builds that were replaced at 12:29 | E60 ran the morning's own binary beside today's: 0.96x, so not the code; the comparison rule now names binaries |
+| 28/10 | the same PowerShell `$r`/`$R` collision as on 24/10, in E60's loop; two launches ran only their pre-run checks | renamed; every chain's variables listed and checked for case collisions before launch |
+| 28/10 | two more guessed stamps (E59 "07:53", E55 "08:05"), each corrected from the clock within a minute | every stamp is now copied from a clock read in the same command that writes it |
+| 28/10 | a recursive search of mine ran during E58's first exactness arms; E58's pre-run drive baseline came from another model's file | both disclosed in E58 (exactness unaffected); the second exposed a real drive finding (one file reads 2.0 GB/s, another 3.1, every time) |
+| 28/10 | prediction: the logical batch `-b` is not part of the reference, about 80% (E59) | wrong: 0/10 records at `-b 512` against 2048; profiles now record `-b` and launch refuses a mismatch |
+| 28/10 | prediction: E60 gives MACHINE (65%); its threshold 0.85 x 15.15 = 12.9 | the run gave 12.98: NO DECISION by 0.08, with CODE ruled out; a threshold set from the outlier, not from the slow state |
+
 ---
 
 ## Results appendix
@@ -1445,3 +1452,56 @@ Taught us: exception unwinding changes nothing we can measure in the answers, so
 be large: in one back-to-back check the old build's stock arm ran at 16.5 and then 7.8 tok/s. That is now a debt row
 of its own, to settle before the 8 GB milestone's rounds.
 
+### 28/10/2026
+
+#### A33. E58: the second rebase, onto `338fce651`
+
+Conditions: upstream `338fce651` (b11936, 32 commits after `63b4b303`, 11 of them touching what Marian runs), the
+nine patches cherry-picked with no conflict and byte-identical, built with `/EHsc`. E48's Gemma 4 26B-A4B IQ4_XS arms
+plus two new P3-prefill arms, then Swift T8 on the old and new builds interleaved in one session. Rule registered
+before the build; pre-run check and GPU clock log beside every run.
+
+| Check | Result |
+|---|---|
+| Unit tests | `ctest -L main` 16/16, trace-id test 1/1, Python 155/155 |
+| Every cache arm (mmap, tier, tier + P3 prefill, ring, ring + P3 prefill) against all-VRAM | 10/10 identical each, max difference 0 over 1,280 tokens |
+| Stock contrast against all-VRAM | still differs: 0/10, 0.590, same divergence points |
+| New build against the old, same arm (Gemma) and Swift T8 records | identical everywhere: none of the 32 commits moved an answer |
+| Swift T8, new/old, same session | 1.02 warm, 0.98 after a 16K prompt |
+| Decode exit (12.0 warm and after 16K) | missed by both builds: new 11.86 / 11.14, old 11.63 / 11.31 |
+
+Taught us: the rebase is clean, and by its registered branch it lands; the exit miss belongs to the machine (A35).
+
+#### A34. E59: the logical batch is part of the reference
+
+Conditions: all-VRAM Gemma on E54's ten long prompts (2,009-2,406 tokens), 64 tokens, at four (ubatch, batch) pairs,
+plus the cache with the tier and P3 prefill at `-ub 512 -b 512`.
+
+| Comparison | Records identical | Max difference |
+|---|---|---|
+| `-ub 512 -b 512` against `-ub 512 -b 2048` (the default) | 0/10 | 0.603 |
+| `-ub 2048 -b 4096` against `-ub 2048 -b 2048` | 1/10 | 0.416 |
+| cache + tier + P3 prefill at `-b 512` against all-VRAM at `-b 512` | 10/10 | 0 |
+| `-ub 2048` against `-ub 512` (the contrast) | 0/10 | 0.668 |
+
+Taught us: the reference is the (ubatch, batch) pair, not the ubatch alone. Marian already fixed both, so no earlier
+result moves, but the default leaned on llama-server's own default `-b`. Profiles now record `-b`, and launch refuses
+a different one or a batch variable in the environment.
+
+#### A35. Row 17 and E60: the machine, not the code
+
+Forensics on 27/10's own logs found two effects. In the afternoon drift the GPU side and the host side slowed
+together, with the same bytes moved, the same CPU performance and GPU share, and the same free memory. In the 2x
+slump the CPU was held below its base clock. E60 then ran 27/10 morning's own binary with its own arguments beside
+today's build, interleaved:
+
+| Arm | Warm decode (two runs) | After 16K |
+|---|---|---|
+| 27/10 morning's binary (build-rb), E51's T arguments | 11.92, 12.96 | 10.57, 10.55 |
+| today's build, T8 | 12.98, 12.99 | 11.65, 11.87 |
+
+Taught us: nothing we built slowed decode; the morning of 27/10 was the fast outlier. New GPU logs show the GPU idle
+between decode bursts at 800-1,200 MHz of 3,105, about 30% busy, far under its power limit: the platform's power
+state is the suspect, and testing it needs a driver setting changed on the reference laptop. The registered verdict
+is still NO DECISION (a threshold missed by 0.08 tok/s). Since 28/10, `tools/prerun/prerun_check.py` and a GPU clock
+log run beside every registered speed run, and comparisons are made inside one session.

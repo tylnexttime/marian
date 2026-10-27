@@ -12,6 +12,9 @@ gate). Evidence marked *theirs* comes from another project's own machine and has
 ## Where we stand
 
 - **Decode is solved on the reference laptop:** the P3 pinned tier meets the M1 exit, exactly (README, JOURNEY A21-A22).
+  Since the middle of 27/10 the laptop itself runs about 20% slower (dev debt 17, not the code: E60), and on 28/10
+  the exit was missed by the old and the new build alike (E58: 11.6-11.9 warm); it is re-measured when the machine's
+  state is understood.
 - **Prefill was the obstacle, and is now closed on this laptop by two opt-in, exact changes (E51, E54).** In the
   default configuration a 16K prompt with the tier still runs 4-5x slower than stock: large batches fault experts
   through the memory map, and the pinned tier takes the page cache they need. With P3 prefill
@@ -52,6 +55,13 @@ before the build.
 - **First reading (27/10, evening):** 13 commits behind `63b4b303`, and the patch stack applies cleanly. Three
   commits touch what we run: a CUDA scale-kernel change (non-contiguous views), a KV-cache clean-up, and MoE
   rescaling for another model family. So the next rebase is due soon, with its exactness check.
+- **The second rebase (28/10/2026, register E58):** the morning watch flagged 11 of 32 new commits, three able to
+  move numerics (the CUDA scale kernel, qwen4exp's k-pool selection, the KV cache's n_pad). The nine patches
+  cherry-picked onto `338fce651` (b11936) with no conflict and are byte-identical. E58 passed on exactness (every
+  Gemma cache arm, P3 prefill included, identical to all-VRAM; the stock contrast still 0.590) and on regression (the
+  new build 1.02x the old warm, 0.98x after 16K, same session). The decode exit was missed by **both** builds that
+  morning (11.6-11.9 warm), so by the registered branch the machine, not the rebase, missed it (dev debt 17). None of
+  the 32 commits moved an answer on either model.
 
 ### 2. Prefill track (the main target)
 
@@ -211,7 +221,7 @@ gate should use a model whose licence fits the deploying organisation.
 
 | # | Debt | State | Ends when |
 |---|---|---|---|
-| 1 | 107 commits behind upstream | **done 27/10**: rebased onto `63b4b303`, E48 passed (exact, decode exit met) | ended 27/10 |
+| 1 | 107 commits behind upstream | **done 27/10**: rebased onto `63b4b303`, E48 passed (exact, decode exit met); **again 28/10** onto `338fce651`, E58 passed on exactness and regression (decode exit missed by both builds: the machine) | ended 27/10; the rebase rule keeps it ended |
 | 2 | M0 drops the cache budget when it launches a plan | **done 27/10**: plans restore cache budget, miss source and tier | ended 27/10 |
 | 3 | Prefill 4-5x behind stock with the tier | **paid down 27/10, opt-in, and calibration now measures both prefill sources and a declared ubatch (offline):** P3 prefill +76% at 16K, exact (E51); with a declared ubatch of 2048, 156.7 tok/s against stock's 142.4 at its default ubatch, exact against all-VRAM at 2048 (E54). The defaults (`mmap`, ubatch 512) are unchanged, so a default tier row is still 4-5x behind; prefill track above | a default (not opt-in) configuration prefills within 10% of stock's best on the reference laptop, exactly |
 | 4 | Exactness proved at top-3 log-probability, not full logits; no E0 harness or parity matrix | M1.2 above | an E0 single-layer harness passes bit-compare at real shapes, and a full-logit comparison is logged for the exactness arms |
@@ -221,12 +231,13 @@ gate should use a model whose licence fits the deploying organisation.
 | 8 | Linux paths never run; one machine only | M1.4 | one Linux run passes the exactness suite (M1.4) |
 | 9 | Swift's publisher missing from the thanks | fixed 27/10 (UkisAI) | ended 27/10 |
 | 10 | Prefix reuse: is it exact? | answered 27/10 (E52): not exact (0 of 10 pairs); class A, off in exact mode | ended 27/10 (E52) |
-| 11 | Governor, `--confirm` and thread sweep tested offline only | governor run live once (E53, 27/10): restarting on a memory reading did harm, so the default is now `watch`; `--governor restart` (slowdown trigger, step-up), `--confirm` and the thread sweep are still offline only | `--governor restart`, `--confirm` and the thread sweep each have one registered live run (E55 for the governor) |
+| 11 | Governor, `--confirm` and thread sweep tested offline only | governor run live once (E53, 27/10): restarting on a memory reading did harm, so the default is now `watch`; `--governor restart` (slowdown trigger, step-up), `--confirm` and the thread sweep are still offline only | `--governor restart`, `--confirm` and the thread sweep each have one registered live run (E55 for the governor; designed and registered 28/10 with a compute-hog phase that must NOT restart and an oversubscription hog that must, waiting for those two tools) |
 | 12 | Serve's request loop decodes 10-16% under calibrate's figure for the same row on a clean machine (E53) | not investigated; the live check now says "below profile", and the restart trigger uses the row's own measured baseline, not the profile | the gap is explained or closed: a measured cause, or calibration measuring through the same request loop serve uses |
 | 13 | E53's paging-cliff scenario (a model loaded beyond VRAM) was not reproduced by pressure on a running server | a launch-time event, guarded by the launch checks against the VRAM and RAM free at launch; the governor does not cover it | a launch-time test loads a model beyond VRAM and the launch checks refuse it |
 | 14 | 0007's cap branch never triggered | in E51 and E54 every tier request (4,096 and 6,144 MiB) sat below both limits and no chunk failed, so the cap and the stop-at-a-failed-chunk branch have never run on the GPU; the Linux branch has only been compiled. Needs a planted test: a request above the cap, and a forced failed chunk | a planted test drives a request above the cap and a forced failed chunk, and both behave as written |
 | 15 | E54's decode figures were judged against E51's, from another session | **done 27/10 (E56)**: a same-session run of T8 at 512 against 2048 showed the machine, not the ubatch, caused the gap | ended 27/10 (E56): the 16-18% gap was the machine; the ubatch trade is +6% warm decode, -6% after 16K, about 3x prefill |
-| 16 | E53's (d) clause was mis-specified: an absolute threshold (shared GPU memory at most 256 MiB) with no baseline | every all-VRAM llama-server read about 854 MiB of shared GPU memory from model load, on a quiet machine, so (d) could not pass and its "could not fail" escape could not trigger. The FAIL stands as written. E55, to be registered before any rerun, defines (d) as a rise above the arm's own P0 baseline, and says that definition was written after seeing E53's data | E55 is registered with (d) as a rise above each arm's own P0 baseline, and run |
-| 17 | The whole machine ran about 22% slower on the afternoon of 27/10 than that morning (the same T8 configuration: 11.87 against 15.15 tok/s decode; stock fell too) | unexplained; thermals, background load and the power plan are the candidates | its cause is named, or a pre-run check (clocks, temperature, free RAM) is part of every registered speed run |
-| 18 | Calibration's prefill probe fills 75% of the measured context, so a 4K calibration judges the P3 prefill source on about 3K tokens, while its gain was measured at 16K | open | calibration probes prefill at the deployment's declared prompt length |
+| 16 | E53's (d) clause was mis-specified: an absolute threshold (shared GPU memory at most 256 MiB) with no baseline | every all-VRAM llama-server read about 854 MiB of shared GPU memory from model load, on a quiet machine, so (d) could not pass and its "could not fail" escape could not trigger. The FAIL stands as written. E55 (registered 28/10, before any run) defines it, as its clause (f), as a rise above the arm's own P0 median, and says that definition was written after seeing E53's data; not yet run | E55 is registered with (d) as a rise above each arm's own P0 baseline, and run |
+| 17 | The whole machine ran about 22% slower on the afternoon of 27/10 than that morning (the same T8 configuration: 11.87 against 15.15 tok/s decode; stock fell too) | **ended 28/10 by its second condition; cause narrowed, not named.** Forensics: the GPU side and host side slowed together (same bytes, CPU perf, GPU share, free RAM); the 2x slump ran with the CPU below base clock; power source, Defender scans and memory ruled out. E60: 27/10 morning's own binary runs 0.96x today's build, so not the code. GPU logs show the GPU idling at 800-1,200 MHz between decode bursts: the platform's power state is the suspect; testing it needs a driver power-management change on the reference laptop. `tools/prerun/prerun_check.py` and a GPU clock log run beside every registered speed run since E58 | ended 28/10 (pre-run check in every registered speed run) |
+| 18 | Calibration's prefill probe fills 75% of the measured context, so a 4K calibration judges the P3 prefill source on about 3K tokens, while its gain was measured at 16K | **done 28/10**: `calibrate --probe-prompt N` probes at the deployment's prompt length (refused if it does not fit the context); the profile records the probe; default unchanged; offline tests | ended 28/10 |
+| 19 | Is the logical batch `-b` part of the reference? The default is `-ub 512 -b 2048`, a declared N is `-ub N -b N`; unmeasured | **answered 28/10 (E59): yes.** At a fixed ubatch, `-b 512` against `-b 2048` matched 0/10 records (0.603); the cache path at `-b 512` still equals all-VRAM at `-b 512`. Profiles now record `-b`; launch refuses a different `-b` and `LLAMA_ARG_BATCH`/`LLAMA_ARG_UBATCH` | ended 28/10 (E59) |
 | 19 | The default ubatch means llama-server's own `-ub 512 -b 2048`; a declared ubatch N passes `-ub N -b N` | only the ubatch should set the compute shape; not measured | one exactness run shows `-b` does not change answers at a fixed ubatch |

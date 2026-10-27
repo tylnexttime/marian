@@ -33,7 +33,7 @@ from pathlib import Path
 
 from . import machine, plan
 from .engines import DEFAULT_UBATCH, LlamaCpp, same_build
-from .profile import sha256_head, ubatch_report
+from .profile import launch_env_problem, logical_batch, sha256_head, ubatch_report
 
 QUICK_CTXS = (4096, 8192, 16384, 32768, 65536, 131072, 262144)
 PROMPTY = re.compile(r'"(?:prompt|messages|content|input|text|system)"\s*:'
@@ -132,6 +132,20 @@ def check(row: dict, doc: dict, model: Path, model_id: str, engine, *, stock: bo
                 reasons.append(msg + "; calibrate again (`marian calibrate`) or serve the stock rows (--stock)")
     c = plan.to_config(dict(row, _ubatch=plan.doc_ubatch(doc)))
     caps = engine.capabilities()
+    why = launch_env_problem()
+    if why:
+        reasons.append(why)
+    rec, now = doc.get("batch"), logical_batch(c.n_ubatch, caps)
+    if rec is None:
+        if not stock and now is not None:
+            warnings.append("the profile does not record its logical batch (-b; measured before register E59), so a "
+                            "change in llama-server's default -b would go unnoticed; `marian calibrate` records it")
+    elif now is None:
+        reasons.append(f"batch: the profile was measured at -b {rec} and this engine's --help does not state its "
+                       "default -b, so the logical batch cannot be checked")
+    elif now != rec:
+        reasons.append(f"batch: the profile was measured at -b {rec} and this engine would run at -b {now}; the "
+                       "logical batch is part of the exactness reference (register E59); calibrate again")
     bad = c.problem()
     if bad:
         reasons.append(f"configuration: {bad}")
