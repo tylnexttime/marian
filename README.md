@@ -223,13 +223,16 @@ Be warned; this is research code.
   the miss sources had misses to serve: the bisection itself has only run against synthetic speed and VRAM curves in
   the tests, not against a real paging cliff. That smoke ran the M1.2 build, at the old pin (`a37cc461`), not the
   rebased fork.
-- **Prompt-prefix reuse is not proven exact, so it is off.** Register test E52 asks whether an answer computed on a
-  reused prompt prefix equals the answer computed fresh. Its registered run has not been made yet: the GPU was held
-  by another test for longer than the 90 minutes E52 may wait. An instrument check before it (27/10/2026, all-VRAM
-  Gemma 4 26B-A4B IQ4_XS on the rebased build, 3 reused pairs, not counted for the verdict) found every reused answer
-  different from its fresh twin: the tokens diverged at positions 23 to 51 of 64 and log-probabilities moved by up to
-  1.28, while a fresh prompt run twice matched exactly. On this model (sliding-window attention), llama-server's
-  `/completion` reused a prefix only after a short previous prompt; `/v1/chat/completions` reused it every time.
+- **Prompt-prefix reuse changes answers, so it is off in exact mode.** Register test E52 (27/10/2026) asked
+  whether an answer computed on a reused prompt prefix equals the answer computed fresh.
+  - **The test:** Gemma 4 26B-A4B IQ4_XS on the rebased build, with a 1,616-token instruction block and ten
+    documents.
+  - **The result:** none of the 10 reused answers matched its fresh twin, either all-VRAM or with the cache and
+    tier; log-probabilities moved by 1.08-4.66, and 5 of 10 differed in tokens. A fresh prompt run twice matched
+    exactly, so the difference comes from the reuse.
+  - **What is still exact:** the cache and tier arm matched all-VRAM on every request, reused prefixes included. The
+    miss path is exact; the reuse is not.
+  - **What it would buy:** 83% of prompt tokens saved, so it remains available as an opt-in, answer-changing switch.
 - The build carries no C++ exception unwinding (`/EHsc` is off, inherited from the measured builds).
 
 ## Status
@@ -377,9 +380,8 @@ exactness) run four interleaved rounds of short windows, and the runner-up repla
 3 of 4 rounds by a median of more than 2% (after Strata's keep-if-faster rule). The outcome is written into the
 profile, and the planner prefers the winner from then on.
 
-**Prompt-prefix reuse is off.** llama-server reuses the shared start of consecutive prompts by default. Whether a
-reused prefix gives the same answer as a fresh one is register test E52 (see Limitations: not shown exact so far), so
-the proxy sets `cache_prompt: false` on every generation request and llama-server starts with `--no-cache-prompt`
+**Prompt-prefix reuse is off.** llama-server reuses the shared start of consecutive prompts by default. A reused
+prefix does not give the same answer as a fresh one (register test E52, see Limitations), so the proxy sets `cache_prompt: false` on every generation request and llama-server starts with `--no-cache-prompt`
 where the build has it. `--cache-prompt on` opts in, and `--gate-prefix FILE` then primes the slot with a fixed
 instruction block after every start. The file must hold the exact text the requests begin with, after any chat
 template.
@@ -398,7 +400,7 @@ pinning and RAM-safety rules; then the 8 GB laptop under RAM pressure. The miles
 - **M1.3:** calibration v1. Built (Python): the VRAM cliff finder, miss sources in a RAM safety envelope, the CPU
   thread sweep, the plan, the calibration gate, launch checks, the `--stock` rollback, the diagnostics bundle, live
   confirmation, and serving through a proxy with a memory governor (watch by default since register E53). Still to
-  do: learned counts, E52's registered run, a live run of the governor's `restart` mode, and the Windows pinning rules
+  do: learned counts, a live run of the governor's `restart` mode, and the Windows pinning rules
   (pin in chunks, all-or-none tier copy) in the fork.
 - **M1.4:** real hardware: a real 8 GB GPU, Linux, a slower link and drive.
 - **M2:** the full expert source (prefill included), removing the per-layer drain, look-ahead prefetch.

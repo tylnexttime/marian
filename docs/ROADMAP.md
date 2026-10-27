@@ -67,13 +67,19 @@ Built from the design, plus safety and method rules other projects paid for:
   the row's own baseline (the median of its first 8 answers) for 10 s while a floor is crossed, and steps back up
   after 60 s of memory that fits the planned row, never with a queue; step-ups count against the 3 restarts.
   `--governor off` runs none. The new modes are tested offline only.
-- **Fixed-prefix KV reuse for the gate**: a gate re-reads the same instructions every time. Strata v0.2.3 reused 91%
-  of a shared prompt (*theirs*). Plumbed (`--cache-prompt on`, `--gate-prefix FILE`), **off by default** until test
-  E52 shows it exact. E52's registered run is still to be made (the GPU was held past its 90-minute wait); its
-  instrument check (27/10, all-VRAM Gemma, 3 reused pairs) found every reused answer different from its fresh twin
-  (max |d logprob| 1.28), so the likely outcome is class A. On Gemma 4 (sliding-window attention) llama-server
-  reuses a prefix through `/completion` only after a short previous prompt, and through `/v1/chat/completions`
-  always (it checkpoints the window at the user turn).
+- **Fixed-prefix KV reuse for the gate: measured, NOT exact, so class A** (register E52, 27/10/2026).
+  - **Why it was tried:** a gate re-reads the same instructions every time. Strata v0.2.3 reused 91% of a shared
+    prompt (*theirs*).
+  - **The test:** Gemma 4 26B-A4B IQ4_XS, a 1,616-token instruction block plus ten documents.
+  - **The result:**
+    - Reused answers matched their fresh twins in 0 of 10 pairs, both all-VRAM and with the cache and tier;
+      log-probabilities moved by 1.08-4.66.
+    - A fresh prompt run twice matched exactly, and the reuse was real: only the document's tokens were evaluated.
+    - Reuse would have saved 83% of prompt tokens (2.8-4.3x prompt time).
+  - **Status:** plumbed (`--cache-prompt on`, `--gate-prefix FILE`) as an opt-in answer-changing switch, off in
+    exact mode.
+  - **Endpoint note:** on this model (sliding-window attention), llama-server reuses a prefix through `/completion`
+    only after a short previous prompt, and through `/v1/chat/completions` always.
 
 Still to build:
 
@@ -164,7 +170,7 @@ gate should use a model whose licence fits the deploying organisation.
 | 7 | One sequence at a time | by design: since 27/10 `serve`'s proxy enforces it (one running, one queued, 503 with a reason); multi-sequence is M2 |
 | 8 | Linux paths never run; one machine only | M1.4 |
 | 9 | Swift's publisher missing from the thanks | fixed 27/10 (UkisAI) |
-| 10 | E52 (prefix-reuse exactness) registered run not made | to run when the GPU is free; client and inputs are ready (outside this repository) |
+| 10 | Prefix reuse: is it exact? | answered 27/10 (E52): not exact (0 of 10 pairs); class A, off in exact mode |
 | 11 | Governor, `--confirm` and thread sweep tested offline only | governor run live once (E53, 27/10): restarting on a memory reading did harm, so the default is now `watch`; `--governor restart` (slowdown trigger, step-up), `--confirm` and the thread sweep are still offline only |
 | 12 | Serve's request loop decodes 10-16% under calibrate's figure for the same row on a clean machine (E53) | not investigated; the live check now says "below profile", and the restart trigger uses the row's own measured baseline, not the profile |
 | 13 | E53's paging-cliff scenario (a model loaded beyond VRAM) was not reproduced by pressure on a running server | a launch-time event, guarded by the launch checks against the VRAM and RAM free at launch; the governor does not cover it |
