@@ -1,0 +1,194 @@
+From d3a7bd02db95a9f149c49ce7a058ee7e7805f6b3 Mon Sep 17 00:00:00 2001
+From: tylnexttime <tylnexttime@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 07:08:28 +1100
+Subject: [PATCH] Marian 0007 tier safety: cap the pinned tier, pin it in
+ chunks of at most 1 GiB, stop growing at a failed chunk
+
+The P3 tier is now capped at min(--moe-tier-mib, 50% of physical RAM, commit room minus a 4 GiB floor), read once at
+start (Windows: GlobalMemoryStatusEx ullTotalPhys / ullAvailPageFile; Linux: sysinfo totalram / freeram + bufferram +
+freeswap). It is pinned in chunks of at most 1 GiB, one chunk per cache group in turn; a chunk the host buffer type can
+only give as pageable memory is freed and the tier stops growing there, keeping what is pinned, instead of serving tier
+hits from pageable memory. One WARN line at start reports requested, capped and pinned MiB, the limits and any failed
+chunk. Sources: Windows caps one pinned allocation and the process total (ik_llama.cpp #2604, Maya #417); upstream
+PR #31122 saw Windows destabilise when more than about half of RAM was pinned.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/llama-moe-source.cpp | 103 +++++++++++++++++++++++++++++++++++----
+ src/llama-moe-source.h   |   3 +-
+ 2 files changed, 96 insertions(+), 10 deletions(-)
+
+diff --git a/src/llama-moe-source.cpp b/src/llama-moe-source.cpp
+index 7a0a13da..cc98e071 100644
+--- a/src/llama-moe-source.cpp
++++ b/src/llama-moe-source.cpp
+@@ -22,6 +22,9 @@
+ #    include <fcntl.h>
+ #    include <sys/stat.h>
+ #    include <unistd.h>
++#    if defined(__linux__)
++#        include <sys/sysinfo.h>
++#    endif
+ #endif
+ 
+ namespace {
+@@ -29,10 +32,39 @@ namespace {
+ constexpr int      moe_source_queue_depth  = 16;  // reads in flight (one per expert tensor)
+ constexpr uint16_t moe_source_decay_period = 256; // decode steps of a layer between two halvings of its counts
+ 
++// Marian 0007 (tier safety): the tier is pinned in chunks of at most 1 GiB (Windows caps one pinned allocation as well as
++// the process total), and capped at min(request, half of physical RAM, commit room minus this floor); pinning more than
++// about half of RAM destabilised Windows in upstream's own tests (PR #31122)
++constexpr uint64_t moe_tier_max_chunk  = 1ull << 30;
++constexpr uint64_t moe_tier_room_floor = 4ull << 30;
++
+ uint64_t moe_round_up(uint64_t x, uint64_t a) {
+     return (x + a - 1)/a*a;
+ }
+ 
++// physical RAM and the room left to commit memory, both 0 if unknown
++// Windows: ullAvailPageFile is the commit charge the system can still grant (RAM plus page file, minus what is committed);
++// Linux: free RAM, buffers and free swap (sysinfo has no commit limit; pinned pages must be resident, so this is the
++// conservative reading)
++void moe_memory_status(uint64_t & phys, uint64_t & commit_room) {
++    phys        = 0;
++    commit_room = 0;
++#if defined(_WIN32)
++    MEMORYSTATUSEX ms = {};
++    ms.dwLength = sizeof(ms);
++    if (GlobalMemoryStatusEx(&ms)) {
++        phys        = ms.ullTotalPhys;
++        commit_room = ms.ullAvailPageFile;
++    }
++#elif defined(__linux__)
++    struct sysinfo si = {};
++    if (sysinfo(&si) == 0) {
++        phys        = (uint64_t) si.totalram*si.mem_unit;
++        commit_room = ((uint64_t) si.freeram + (uint64_t) si.bufferram + (uint64_t) si.freeswap)*si.mem_unit;
++    }
++#endif
++}
++
+ #if defined(_WIN32)
+ std::wstring moe_utf8_to_wide(const std::string & s) {
+     const int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+@@ -147,6 +179,20 @@ struct llama_moe_source::impl {
+         return res;
+     }
+ 
++    // Marian 0007: one chunk of the tier, pinned or nothing: a chunk the host buffer type could only give as pageable
++    // memory is freed again (the tier stops growing there); never sets error
++    uint8_t * alloc_pinned(ggml_backend_buffer_type_t host_buft, size_t size) {
++        ggml_backend_buffer_ptr buf(ggml_backend_buft_alloc_buffer(host_buft, size + sector));
++        if (!buf || ggml_backend_buffer_get_type(buf.get()) != host_buft) {
++            return nullptr;
++        }
++        pinned_bytes += size;
++        uint8_t * base = (uint8_t *) ggml_backend_buffer_get_base(buf.get());
++        uint8_t * res  = (uint8_t *) (moe_round_up((uintptr_t) base, sector));
++        bufs.push_back(std::move(buf));
++        return res;
++    }
++
+     bool open_files(const std::vector<std::string> & paths) {
+         for (const std::string & path : paths) {
+             file f;
+@@ -462,8 +508,20 @@ llama_moe_source::llama_moe_source(const llama_moe_source_params & params, ggml_
+         for (size_t b : group_bytes) {
+             total += b;
+         }
+-        const size_t max_chunk = std::min<size_t>(ggml_backend_buft_get_max_size(host_buft), (size_t) 1024*1024*1024);
++
++        // Marian 0007 (tier safety): cap = min(request, 50% of physical RAM, commit room minus a 4 GiB floor)
++        uint64_t phys = 0;
++        uint64_t room = 0;
++        moe_memory_status(phys, room);
++        uint64_t cap = params.tier_size;
++        if (phys > 0) {
++            cap = std::min<uint64_t>(cap, phys/2);
++            cap = std::min<uint64_t>(cap, room > moe_tier_room_floor ? room - moe_tier_room_floor : 0);
++        }
++
++        const size_t max_chunk = std::min<size_t>(ggml_backend_buft_get_max_size(host_buft), (size_t) moe_tier_max_chunk);
+         p.tiers.resize(n_group);
++        std::vector<int32_t> want(n_group, 0);
+         for (size_t g = 0; g < n_group; ++g) {
+             impl::tier & t = p.tiers[g];
+             t.slot_bytes = group_slot[g];
+@@ -471,24 +529,51 @@ llama_moe_source::llama_moe_source(const llama_moe_source_params & params, ggml_
+                 continue;
+             }
+             // the tier is split among the groups like the VRAM budget, by the size of their experts
+-            const size_t share = (size_t) ((double) params.tier_size*group_bytes[g]/total);
+-            t.n_slots = (int32_t) std::min<size_t>(share/t.slot_bytes, (size_t) group_layers[g]*n_expert);
+-            const int32_t per_chunk = (int32_t) std::max<size_t>(1, max_chunk/t.slot_bytes);
+-            for (int32_t s0 = 0; s0 < t.n_slots; s0 += per_chunk) {
+-                const int32_t n = std::min(per_chunk, t.n_slots - s0);
+-                uint8_t * base = p.alloc(host_buft, (size_t) n*t.slot_bytes);
++            const size_t share = (size_t) ((double) cap*group_bytes[g]/total);
++            want[g] = (int32_t) std::min<size_t>(share/t.slot_bytes, (size_t) group_layers[g]*n_expert);
++        }
++        // pinned in chunks of at most 1 GiB, one chunk per group in turn, so that if a chunk cannot be pinned every group
++        // keeps a similar part of its share; the tier then stops growing and keeps what is pinned
++        const size_t pinned_before = p.pinned_bytes;
++        size_t n_chunks = 0;
++        size_t failed_chunk = 0; // bytes of the chunk that could not be pinned, 0 if none failed
++        for (bool more = true; more && failed_chunk == 0; ) {
++            more = false;
++            for (size_t g = 0; g < n_group && failed_chunk == 0; ++g) {
++                impl::tier & t = p.tiers[g];
++                const int32_t have = (int32_t) t.base.size();
++                if (have >= want[g]) {
++                    continue;
++                }
++                const int32_t per_chunk = (int32_t) std::max<size_t>(1, max_chunk/t.slot_bytes);
++                const int32_t n = std::min(per_chunk, want[g] - have);
++                uint8_t * base = p.alloc_pinned(host_buft, (size_t) n*t.slot_bytes);
+                 if (base == nullptr) {
+-                    fail(p.error);
+-                    return;
++                    failed_chunk = (size_t) n*t.slot_bytes;
++                    break;
+                 }
++                n_chunks++;
+                 for (int32_t s = 0; s < n; ++s) {
+                     t.base.push_back(base + (size_t) s*t.slot_bytes);
+                 }
++                more = more || have + n < want[g];
+             }
++        }
++        for (size_t g = 0; g < n_group; ++g) {
++            impl::tier & t = p.tiers[g];
++            t.n_slots = (int32_t) t.base.size();
+             t.key.assign(t.n_slots, -1);
+             t.ref.assign(t.n_slots, 0);
+             t.busy.assign(t.n_slots, 0);
+         }
++        const size_t tier_pinned = p.pinned_bytes - pinned_before;
++        const std::string limits = phys > 0
++            ? format("50%% of %.1f GiB RAM = %.0f MiB; commit room %.0f MiB minus a %.0f MiB floor",
++                phys/1073741824.0, phys/2/1048576.0, room/1048576.0, moe_tier_room_floor/1048576.0)
++            : std::string("RAM size unknown, not capped");
++        LLAMA_LOG_WARN("llama_moe_source: tier requested %.0f MiB, capped at %.0f MiB (%s), pinned %.0f MiB in %zu chunks of at most %.0f MiB%s\n",
++            params.tier_size/1048576.0, cap/1048576.0, limits.c_str(), tier_pinned/1048576.0, n_chunks, max_chunk/1048576.0,
++            failed_chunk > 0 ? format("; pinning the next chunk (%.0f MiB) failed, the tier stops there", failed_chunk/1048576.0).c_str() : "");
+         p.tier_slot.assign(layers.size(), std::vector<int32_t>());
+         p.count.assign(layers.size(), std::vector<uint16_t>());
+         p.n_decode.assign(layers.size(), 0);
+diff --git a/src/llama-moe-source.h b/src/llama-moe-source.h
+index 21936a34..837d15f6 100644
+--- a/src/llama-moe-source.h
++++ b/src/llama-moe-source.h
+@@ -26,7 +26,8 @@ enum llama_moe_miss_source_type {
+ struct llama_moe_source_params {
+     int32_t type      = LLAMA_MOE_MISS_SOURCE_MMAP;
+     size_t  ring_size = 0; // pinned staging ring in bytes, 0 = 64 MiB
+-    size_t  tier_size = 0; // pinned RAM tier in bytes (type TIER)
++    size_t  tier_size = 0; // pinned RAM tier in bytes (type TIER); Marian 0007: capped at min(this, 50% of physical RAM,
++                           // commit room minus 4 GiB), pinned in chunks of at most 1 GiB, stops growing at a failed chunk
+ };
+ 
+ // one expert tensor of a cached layer: where it is in its GGUF file and the bank its experts are uploaded to
+-- 
+2.45.1.windows.1
+

@@ -1,0 +1,703 @@
+From 8c32084b3312331958893fb97034f5f9ae7f6756 Mon Sep 17 00:00:00 2001
+From: tylnexttime <tylnexttime@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 08:16:29 +1100
+Subject: [PATCH] Marian 0008 prefill source: the large-batch selective copy
+ takes its misses from the P3 source
+
+With --moe-miss-source ring or tier, llama_context::sched_copy_experts (ubatches above 32 tokens) no longer uploads the
+experts it does not copy from the VRAM cache from the memory-mapped host tensor. Each run of experts, and upstream's
+512-byte MMQ padding after it, comes from the P3 source instead: an expert the pinned tier holds is uploaded from its
+tier slot; the others are read unbuffered (FILE_FLAG_NO_BUFFERING / O_DIRECT) through the pinned staging ring, runs of
+consecutive experts in chunks of up to one ring segment, up to 16 reads in flight. The ring is cut into 32 segments; a
+segment is reused only after the upload from it has run (a backend event per segment, or a synchronize when the device
+has no events), and the large-batch path synchronizes once before using ring memory the slot path may still upload from.
+A failed read is uploaded from the host tensor and counted. The bytes and destinations are exactly upstream's (same dst
+offsets and lengths, same file bytes the memory map holds); everything is queued on the backend's stream before the
+split's compute. Off when the miss source is mmap (the default path is unchanged).
+
+Debug switch: MARIAN_MOE_SOURCE_VERIFY=1 compares the first MARIAN_MOE_SOURCE_VERIFY_N uploads (default 100000; slot
+path and large-batch path, tier hits included) with the host tensor and aborts on any difference, reporting its count
+every 50000 uploads; =all now compares every upload, tier hits included.
+
+Traces: the P0 L line is unchanged (bytes = bytes uploaded, now from the source); the fill trace
+(MARIAN_MOE_TRACE_FILLS) gains one L line per expert tensor uploaded by a selective copy from the source, slot -1, src
+t (tier) or r (ring), joined to the copy's L line by (t_us, layer); readers of F lines are unaffected.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/llama-context.cpp    |  61 +++++++--
+ src/llama-context.h      |   4 +
+ src/llama-moe-cache.cpp  |  39 ++++++
+ src/llama-moe-cache.h    |  12 ++
+ src/llama-moe-source.cpp | 269 +++++++++++++++++++++++++++++++++++----
+ src/llama-moe-source.h   |  15 +++
+ 6 files changed, 369 insertions(+), 31 deletions(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 91966f84..5ede13d5 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -2820,12 +2820,18 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+     const int64_t n_expert    = src->ne[2];
+     const size_t  expert_size = src->nb[2];
+ 
++    // Marian 0008: with a P3 miss source (--moe-miss-source ring or tier) the experts not copied from the cache are uploaded
++    // from the pinned tier or read unbuffered through the staging ring, never from the memory map; the same bytes to the
++    // same offsets of dst as below, all of it queued on the backend's stream before the split's compute
++    const bool p3 = lctx->moe_cache && lctx->moe_cache->has_miss_source(backend, src);
++
+     FILE * trace = llama_moe_trace_file();
++    FILE * trace_fills = p3 ? llama_moe_trace_fills_file() : nullptr;
+     llama_moe_ids_writer * trace_ids = llama_moe_trace_ids();
+-    const int64_t t0 = trace || trace_ids ? llama_moe_trace_us() : 0;
++    const int64_t t0 = trace || trace_ids || trace_fills ? llama_moe_trace_us() : 0;
+     int64_t t1 = t0;
+     size_t n_cached = 0; // experts copied device-to-device from the MoE cache
+-    size_t bytes_up = 0; // bytes uploaded from host memory
++    size_t bytes_up = 0; // bytes uploaded from host memory (0008: from the P3 source)
+ 
+     if (ids != st.ids || (int64_t) st.used.size() != n_expert) {
+         st.ids_data.resize(ggml_nbytes(ids)/sizeof(int32_t));
+@@ -2853,6 +2859,25 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+         }
+     }
+ 
++    // upload experts [e0, e0 + n) and pad bytes of expert e0 + n from the host tensor, or (0008) from the P3 source
++    st.fill_e.clear();
++    st.fill_src.clear();
++    auto upload = [&](int64_t e0, int64_t n, size_t pad) {
++        const size_t offset = e0*expert_size;
++        const size_t size   = n*expert_size + pad;
++        if (p3) {
++            const size_t k = st.fill_src.size();
++            st.fill_src.resize(k + n);
++            lctx->moe_cache->upload_experts(backend, src, dst, e0, n, pad, st.fill_src.data() + k);
++            for (int64_t i = 0; i < n; ++i) {
++                st.fill_e.push_back((int32_t) (e0 + i));
++            }
++        } else {
++            ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + offset, offset, size);
++        }
++        bytes_up += size;
++    };
++
+     // group consecutive experts and copy them together
+     for (int64_t first = 0; first < n_expert; ) {
+         if (!st.used[first]) {
+@@ -2873,8 +2898,7 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+                 continue;
+             }
+             if (next < e) {
+-                ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + next*expert_size, next*expert_size, (e - next)*expert_size);
+-                bytes_up += (e - next)*expert_size;
++                upload(next, e - next, 0);
+             }
+             n_cached += n;
+             e   += n;
+@@ -2882,20 +2906,25 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+         }
+ 
+         // copy a bit extra to ensure there are no NaNs in the padding of the last expert, this is necessary for MMQ in the CUDA backend
+-        const size_t offset  = next*expert_size;
+         const size_t padding = last < n_expert - 1 ? std::min<size_t>(expert_size, 512) : 0;
+         const size_t size    = (last + 1 - next)*expert_size + padding;
+         if (size > 0) {
+-            ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + offset, offset, size);
+-            bytes_up += size;
++            upload(next, last + 1 - next, padding);
+         }
+ 
+         first = last + 1;
+     }
+ 
+-    if (trace) {
+-        int il = -1;
++    if (p3) {
++        // complete the reads and queue their uploads before the split's compute
++        lctx->moe_cache->upload_experts_end(backend);
++    }
++
++    int il = -1;
++    if (trace || trace_fills) {
+         std::sscanf(src->name, "blk.%d.", &il);
++    }
++    if (trace) {
+         const size_t n_used = std::count(st.used.begin(), st.used.end(), true);
+         const int64_t t2 = llama_moe_trace_us();
+         // n_ids = selections in the batch; uniq = distinct experts used; uniq_hits = of those, copied from the cache
+@@ -2903,6 +2932,20 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+             n_used, n_cached, n_used - std::min(n_used, n_cached), bytes_up, (long long) (t1 - t0), (long long) (t2 - t1));
+     }
+ 
++    if (trace_fills) {
++        // Marian 0008: one L line per expert tensor uploaded from the P3 source, joined to this copy's L line by (t_us, layer)
++        for (size_t i = 0; i < st.fill_e.size(); ++i) {
++            std::fprintf(trace_fills, "L,%lld,%d,%lld,%d,-1,%c,%zu\n", (long long) t0, il, (long long) ggml_nelements(ids),
++                st.fill_e[i], st.fill_src[i], expert_size);
++        }
++        static size_t n_fill_lines = 0;
++        n_fill_lines += st.fill_e.size();
++        if (n_fill_lines >= 4096) {
++            n_fill_lines = 0;
++            std::fflush(trace_fills); // servers are usually killed, so do not rely on the atexit flush
++        }
++    }
++
+     return true;
+ }
+ 
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 6938fb10..75057967 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -378,6 +378,10 @@ private:
+         std::vector<int32_t> ids_data;
+         std::vector<bool>    used;
+ 
++        // Marian 0008: the experts one selective copy uploaded from the P3 source and where from, for the fill trace
++        std::vector<int32_t> fill_e;
++        std::vector<char>    fill_src;
++
+         void reset() {
+             ids = nullptr;
+             ids_data.clear();
+diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
+index 5034355a..eed658fa 100644
+--- a/src/llama-moe-cache.cpp
++++ b/src/llama-moe-cache.cpp
+@@ -45,6 +45,8 @@ FILE * llama_moe_trace_fills_file() {
+             std::setvbuf(res, nullptr, _IOFBF, 1 << 20);
+             // F: one expert uploaded by a slot-map lookup; t_us and layer match the lookup's S line in MARIAN_MOE_TRACE
+             // src: m = host tensor (upstream), t = pinned tier, a = read and admitted into the tier, r = read through the ring
++            // L (Marian 0008, only with --moe-miss-source ring or tier): one expert tensor uploaded by a large-batch selective
++            // copy, slot -1, bytes = that tensor's bytes per expert; t_us and layer match the copy's L line; src t or r
+             std::fprintf(res, "kind,t_us,layer,n_ids,expert,slot,src,bytes\n");
+             std::atexit([] () { std::fflush(llama_moe_trace_fills_file()); });
+         }
+@@ -724,6 +726,31 @@ struct llama_moe_cache::impl {
+         return n;
+     }
+ 
++    // Marian 0008: the large-batch selective copy takes its uploads from the P3 source
++    bool has_miss_source(ggml_backend_t backend, const ggml_tensor * w) const {
++        if (!source) {
++            return false;
++        }
++        const auto it = bindings.find(w);
++        if (it == bindings.end()) {
++            return false;
++        }
++        return backend == devices[groups[layers[it->second.il].ig].id].backend;
++    }
++
++    void upload_experts(ggml_backend_t backend, const ggml_tensor * w, ggml_tensor * dst, int64_t e0, int64_t n, size_t pad, char * src) {
++        const auto it = bindings.find(w);
++        GGML_ASSERT(source && it != bindings.end());
++        GGML_ASSERT(dst->nb[2] == w->nb[2] && dst->ne[2] == w->ne[2]);
++        source->copy(backend, it->second.il, it->second.ip, dst, e0, n, pad, src);
++    }
++
++    void upload_experts_end(ggml_backend_t backend) {
++        if (source) {
++            source->copy_end(backend);
++        }
++    }
++
+     bool copy(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph) {
+         const auto it = layer_of.find(src);
+         if (it == layer_of.end()) {
+@@ -898,6 +925,18 @@ int64_t llama_moe_cache::copy_experts(ggml_backend_t backend, const ggml_tensor
+     return pimpl->copy_experts(backend, w, dst, e, last);
+ }
+ 
++bool llama_moe_cache::has_miss_source(ggml_backend_t backend, const ggml_tensor * w) const {
++    return pimpl->has_miss_source(backend, w);
++}
++
++void llama_moe_cache::upload_experts(ggml_backend_t backend, const ggml_tensor * w, ggml_tensor * dst, int64_t e0, int64_t n, size_t pad, char * src) {
++    pimpl->upload_experts(backend, w, dst, e0, n, pad, src);
++}
++
++void llama_moe_cache::upload_experts_end(ggml_backend_t backend) {
++    pimpl->upload_experts_end(backend);
++}
++
+ std::map<ggml_backend_buffer_type_t, size_t> llama_moe_cache::memory_breakdown() const {
+     std::map<ggml_backend_buffer_type_t, size_t> res;
+     for (const auto & d : pimpl->devices) {
+diff --git a/src/llama-moe-cache.h b/src/llama-moe-cache.h
+index 0f24f927..2b606830 100644
+--- a/src/llama-moe-cache.h
++++ b/src/llama-moe-cache.h
+@@ -41,6 +41,16 @@ public:
+     // returns the number of experts copied, 0 if expert e is not in the cache
+     int64_t copy_experts(ggml_backend_t backend, const ggml_tensor * w, ggml_tensor * dst, int64_t e, int64_t last);
+ 
++    // Marian 0008: whether the large-batch selective copy of host expert tensor w on this backend uploads the experts it
++    // does not copy from the cache from the P3 miss source (--moe-miss-source ring or tier) instead of the host tensor
++    bool has_miss_source(ggml_backend_t backend, const ggml_tensor * w) const;
++
++    // Marian 0008, only if has_miss_source: upload experts [e0, e0 + n) of w, then the first pad bytes of expert e0 + n,
++    // into dst (the device copy of w, expert e at e*nb2), from the tier or unbuffered reads, never the memory map;
++    // src (optional) gets n chars, 't' tier or 'r' ring; upload_experts_end completes the reads of one selective copy
++    void upload_experts(ggml_backend_t backend, const ggml_tensor * w, ggml_tensor * dst, int64_t e0, int64_t n, size_t pad, char * src);
++    void upload_experts_end(ggml_backend_t backend);
++
+     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
+ 
+ private:
+@@ -57,6 +67,8 @@ int64_t llama_moe_trace_us();
+ 
+ // Marian M1.1 fill trace: one CSV line per expert uploaded by a slot-map lookup (expert id, slot, source), written only
+ // when MARIAN_MOE_TRACE_FILLS names a file; the lines carry the t_us and layer of the lookup's S line
++// Marian 0008: with a P3 miss source, also one L line per expert tensor uploaded by a large-batch selective copy (slot -1,
++// source t or r), carrying the t_us and layer of the copy's L line in MARIAN_MOE_TRACE
+ FILE *  llama_moe_trace_fills_file();
+ 
+ // Marian P1 routing-id trace: every routed expert id of every MoE layer step, hits included, in the binary format of
+diff --git a/src/llama-moe-source.cpp b/src/llama-moe-source.cpp
+index cc98e071..bc66a3f9 100644
+--- a/src/llama-moe-source.cpp
++++ b/src/llama-moe-source.cpp
+@@ -97,13 +97,14 @@ struct llama_moe_source::impl {
+         uint64_t        aoff;     // sector-aligned file offset
+         uint8_t       * buf;      // sector-aligned region
+         uint32_t        skip;     // the payload starts at buf + skip
+-        uint32_t        len;      // payload bytes (one expert of one tensor)
++        uint32_t        len;      // payload bytes (one expert of one tensor; 0008: a chunk of a run of experts)
+         uint32_t        alen;     // bytes read, a multiple of the sector size
+         ggml_tensor   * bank;     // upload target, nullptr: read only (verification)
+         size_t          bank_off;
+         const uint8_t * host;     // the same bytes in the host tensor
+         int32_t         tier_g;   // the tier slot being filled, -1 for the ring
+         int32_t         tier_s;
++        int32_t         seg;      // Marian 0008: the ring segment of a large-batch read, -1 otherwise
+     };
+ 
+     struct tier {
+@@ -150,9 +151,27 @@ struct llama_moe_source::impl {
+     int32_t  il     = -1;
+     bool     decode = false;
+ 
++    // Marian 0008: the large-batch copies read through the same ring memory, cut into seg_n segments of seg_bytes; a
++    // segment is reused only after the upload from it has finished: an event recorded after the upload, or, if the
++    // device has no events, a synchronize of the backend
++    int32_t                           seg_n        = 0;
++    size_t                            seg_bytes    = 0;
++    int32_t                           seg_next     = 0;
++    bool                              events_tried = false;
++    std::vector<ggml_backend_event_t> seg_ev;      // [seg_n], empty: no events
++    std::vector<uint8_t>              seg_pending; // [seg_n] an upload from the segment may still be running
++    std::vector<int32_t>              seg_reads;   // [seg_n] reads into the segment still in the queue
++    bool                              ring_dirty   = false; // the slot path uploaded from the ring since its last synchronize
++
++    // MARIAN_MOE_SOURCE_VERIFY=1: compare the first verify_n uploads with the host tensor (all: verify_all, every upload)
++    size_t verify_n       = 0;
++    size_t n_verified     = 0;
++    size_t verified_bytes = 0;
++
+     // stats
+     size_t n_tier = 0, n_admit = 0, n_ring = 0, n_fail = 0, n_wrap = 0, n_mismatch = 0;
+     size_t bytes_read = 0, step_read = 0;
++    size_t n_copy_tier = 0, n_copy_ring = 0, n_copy_reads = 0, n_copy_calls = 0, copy_bytes_read = 0; // 0008
+ 
+     // set when the source cannot be used; no exception is thrown, since this build may not unwind (no /EHsc)
+     std::string error;
+@@ -260,6 +279,9 @@ struct llama_moe_source::impl {
+ 
+     ~impl() {
+         drain(nullptr);
++        for (ggml_backend_event_t ev : seg_ev) {
++            ggml_backend_event_free(ev);
++        }
+ #if defined(_WIN32)
+         for (HANDLE ev : free_ev) {
+             CloseHandle(ev);
+@@ -287,17 +309,38 @@ struct llama_moe_source::impl {
+         }
+     }
+ 
+-    // the read r has finished (ok) or failed: check it, then upload the expert's bytes of this tensor
++    // every upload from the source goes through here: len bytes of data to bank at off, where host holds the same bytes
++    // in the host tensor; MARIAN_MOE_SOURCE_VERIFY=1 compares the first verify_n uploads with it, =all every upload, and
++    // a difference aborts (never compute with bytes that differ from the model's)
++    void upload(ggml_backend_t backend, ggml_tensor * bank, const uint8_t * data, size_t off, size_t len, const uint8_t * host) {
++        if (data != host && (verify_all || n_verified < verify_n)) {
++            if (std::memcmp(data, host, len) != 0) {
++                n_mismatch++;
++                GGML_ABORT("llama_moe_source: %zu bytes uploaded to %s at offset %zu differ from the memory map", len, bank->name, off);
++            }
++            verified_bytes += len;
++            if (++n_verified == verify_n && !verify_all) {
++                LLAMA_LOG_WARN("llama_moe_source: MARIAN_MOE_SOURCE_VERIFY=1: the first %zu uploads (%.2f GiB) equal the memory map, checking stops\n",
++                    verify_n, verified_bytes/1073741824.0);
++            } else if (n_verified % 50000 == 0) {
++                // servers are usually killed, so the count is reported as it goes
++                LLAMA_LOG_WARN("llama_moe_source: %zu uploads (%.2f GiB) compared with the memory map so far, no difference\n",
++                    n_verified, verified_bytes/1073741824.0);
++            }
++        }
++        ggml_backend_tensor_set_async(backend, bank, data, off, len);
++    }
++
++    // the read r has finished (ok) or failed: check it, then upload its bytes
+     void finish(ggml_backend_t backend, read_op & r, bool ok) {
+         if (ok) {
+             bytes_read += r.alen;
+             step_read  += r.alen;
+-            if ((verify_all || r.bank == nullptr) && std::memcmp(r.buf + r.skip, r.host, r.len) != 0) {
+-                n_mismatch++;
+-                if (r.bank != nullptr) {
+-                    // never compute with bytes that differ from the model's
+-                    GGML_ABORT("llama_moe_source: bytes read at offset %llu differ from the memory map", (unsigned long long) (r.aoff + r.skip));
+-                }
++            if (r.seg >= 0) {
++                copy_bytes_read += r.alen;
++            }
++            if (r.bank == nullptr && std::memcmp(r.buf + r.skip, r.host, r.len) != 0) {
++                n_mismatch++; // the load-time check
+             }
+         } else {
+             if (n_fail++ == 0) {
+@@ -309,7 +352,17 @@ struct llama_moe_source::impl {
+             }
+         }
+         if (r.bank != nullptr && backend != nullptr) {
+-            ggml_backend_tensor_set_async(backend, r.bank, ok ? r.buf + r.skip : r.host, r.bank_off, r.len);
++            upload(backend, r.bank, ok ? r.buf + r.skip : r.host, r.bank_off, r.len, r.host);
++            if (r.seg >= 0) {
++                // the segment is free again once this upload has run (0008)
++                if (!seg_ev.empty()) {
++                    ggml_backend_event_record(seg_ev[r.seg], backend);
++                }
++                seg_pending[r.seg] = 1;
++            }
++        }
++        if (r.seg >= 0) {
++            seg_reads[r.seg]--;
+         }
+     }
+ 
+@@ -332,21 +385,26 @@ struct llama_moe_source::impl {
+         }
+     }
+ 
+-    void submit(ggml_backend_t backend, const llama_moe_source_tensor & t, int32_t e, uint8_t * region,
+-                ggml_tensor * bank, size_t bank_off, int32_t tier_g, int32_t tier_s) {
+-        const uint64_t off = t.offset + (uint64_t) e*t.nb2;
++    // read len bytes at file offset off into region (sector-aligned, room for round_up(len, sector) + sector bytes),
++    // then upload them to bank at bank_off; host: the same bytes in the host tensor
++    void submit_raw(ggml_backend_t backend, int32_t file, uint64_t off, uint64_t len, uint8_t * region,
++                    ggml_tensor * bank, size_t bank_off, const uint8_t * host, int32_t tier_g, int32_t tier_s, int32_t seg) {
+         read_op r = {};
+-        r.file     = t.file;
++        r.file     = file;
+         r.aoff     = off/sector*sector;
+         r.buf      = region;
+         r.skip     = (uint32_t) (off - r.aoff);
+-        r.len      = (uint32_t) t.nb2;
+-        r.alen     = (uint32_t) moe_round_up(r.skip + t.nb2, sector);
++        r.len      = (uint32_t) len;
++        r.alen     = (uint32_t) moe_round_up(r.skip + len, sector);
+         r.bank     = bank;
+         r.bank_off = bank_off;
+-        r.host     = (const uint8_t *) t.host->data + (size_t) e*t.nb2;
++        r.host     = host;
+         r.tier_g   = tier_g;
+         r.tier_s   = tier_s;
++        r.seg      = seg;
++        if (seg >= 0) {
++            seg_reads[seg]++;
++        }
+ #if defined(_WIN32)
+         if ((int) queue.size() >= moe_source_queue_depth) {
+             complete_oldest(backend);
+@@ -382,6 +440,12 @@ struct llama_moe_source::impl {
+ #endif
+     }
+ 
++    void submit(ggml_backend_t backend, const llama_moe_source_tensor & t, int32_t e, uint8_t * region,
++                ggml_tensor * bank, size_t bank_off, int32_t tier_g, int32_t tier_s) {
++        submit_raw(backend, t.file, t.offset + (uint64_t) e*t.nb2, t.nb2, region, bank, bank_off,
++            (const uint8_t *) t.host->data + (size_t) e*t.nb2, tier_g, tier_s, -1);
++    }
++
+     // read expert e of the current layer into region, then upload each tensor to slot s
+     void read_expert(ggml_backend_t backend, int32_t e, int32_t s, uint8_t * slot, int32_t tier_g, int32_t tier_s) {
+         const auto & ts  = layers[il];
+@@ -391,6 +455,69 @@ struct llama_moe_source::impl {
+         }
+     }
+ 
++    // Marian 0008: before a large-batch copy uses the ring, wait for whatever the slot path still uploads from it, and
++    // create the segment events on first use (none if the device has no events: then a synchronize frees a segment)
++    void copy_prepare(ggml_backend_t backend) {
++        if (!events_tried) {
++            events_tried = true;
++            ggml_backend_dev_t dev = ggml_backend_get_device(backend);
++            for (int32_t s = 0; s < seg_n && dev != nullptr; ++s) {
++                ggml_backend_event_t ev = ggml_backend_event_new(dev);
++                if (ev == nullptr) {
++                    break;
++                }
++                seg_ev.push_back(ev);
++            }
++            if ((int32_t) seg_ev.size() < seg_n) {
++                for (ggml_backend_event_t ev : seg_ev) {
++                    ggml_backend_event_free(ev);
++                }
++                seg_ev.clear();
++            }
++        }
++        if (ring_dirty) {
++            drain(backend);
++            ggml_backend_synchronize(backend);
++            std::fill(seg_pending.begin(), seg_pending.end(), 0);
++            ring_dirty = false;
++        }
++    }
++
++    // the next ring segment, once its read is complete and its upload has run
++    int32_t take_segment(ggml_backend_t backend) {
++        const int32_t s = seg_next;
++        seg_next = (seg_next + 1) % seg_n;
++        while (seg_reads[s] > 0) {
++            complete_oldest(backend);
++        }
++        if (seg_pending[s]) {
++            if (!seg_ev.empty()) {
++                ggml_backend_event_synchronize(seg_ev[s]);
++                seg_pending[s] = 0;
++            } else {
++                drain(backend);
++                ggml_backend_synchronize(backend);
++                std::fill(seg_pending.begin(), seg_pending.end(), 0);
++            }
++        }
++        return s;
++    }
++
++    // bytes [off, off + len) of expert tensor t, which go to the same offsets of dst: read unbuffered through ring
++    // segments, at most one segment (less a sector) per read, the reads overlapped up to the queue depth
++    void read_run(ggml_backend_t backend, const llama_moe_source_tensor & t, ggml_tensor * dst, uint64_t off, uint64_t len) {
++        const uint64_t max_len = seg_bytes - sector;
++        while (len > 0) {
++            const uint64_t n = std::min(len, max_len);
++            const int32_t  s = take_segment(backend);
++            submit_raw(backend, t.file, t.offset + off, n, ring + (size_t) s*seg_bytes, dst, (size_t) off,
++                (const uint8_t *) t.host->data + off, -1, -1, s);
++            n_copy_reads++;
++            off += n;
++            len -= n;
++        }
++    }
++
+     // CLOCK over the group's tier, skipping slots in use in this step; a free slot is taken at once, otherwise the
+     // newcomer is admitted only if it was selected more often than the expert it would replace (TinyLFU-style)
+     int32_t victim(tier & t, int32_t e) {
+@@ -427,6 +554,12 @@ llama_moe_source::llama_moe_source(const llama_moe_source_params & params, ggml_
+     const char * verify = std::getenv("MARIAN_MOE_SOURCE_VERIFY");
+     p.verify_all = verify != nullptr && std::strcmp(verify, "all") == 0;
+     const bool verify_load = verify == nullptr || std::strcmp(verify, "0") != 0;
++    if (verify != nullptr && std::strcmp(verify, "1") == 0) {
++        // Marian 0008: compare the first N uploads (slot path and large-batch copies) with the host tensor, abort on a difference
++        const char * n = std::getenv("MARIAN_MOE_SOURCE_VERIFY_N");
++        const long long v = n != nullptr ? std::atoll(n) : 0;
++        p.verify_n = v > 0 ? (size_t) v : (size_t) 100000;
++    }
+ 
+     // on failure: keep the reason, free the pinned memory, and leave the object inert (the caller drops it)
+     auto fail = [&p](const std::string & why) {
+@@ -477,6 +610,19 @@ llama_moe_source::llama_moe_source(const llama_moe_source_params & params, ggml_
+         fail(p.error);
+         return;
+     }
++    // Marian 0008: the same ring memory as segments for the large-batch copies, one read per segment (the ring and its
++    // slots are multiples of the sector size, so every segment starts sector-aligned); twice as many segments as reads in
++    // flight, so the segment a new read takes was uploaded from a queue's length earlier and is usually free already
++    {
++        const size_t ring_bytes = (size_t) p.ring_n*p.ring_slot;
++        p.seg_n = 2*moe_source_queue_depth;
++        while (p.seg_n > 1 && ring_bytes/p.seg_n < 4*p.sector) {
++            p.seg_n /= 2;
++        }
++        p.seg_bytes = ring_bytes/p.seg_n/p.sector*p.sector;
++        p.seg_pending.assign(p.seg_n, 0);
++        p.seg_reads.assign(p.seg_n, 0);
++    }
+ 
+     // exactness check before anything else is pinned: the first and last expert of every cached tensor, read through
+     // the source, must equal the bytes in the memory map, else the source is not used
+@@ -598,10 +744,17 @@ llama_moe_source::llama_moe_source(const llama_moe_source_params & params, ggml_
+             tier_desc += format(" %d", t.n_slots);
+         }
+     }
+-    LLAMA_LOG_WARN("llama_moe_source: Marian P3 (experimental) %s: ring %d x %.2f MiB, %s, %.2f MiB pinned%s, sector %llu, %s reads%s\n",
++    std::string verify_desc = verify_load ? ", verified against the memory map" : "";
++    if (p.verify_all) {
++        verify_desc += ", every upload compared with it (MARIAN_MOE_SOURCE_VERIFY=all)";
++    } else if (p.verify_n > 0) {
++        verify_desc += format(", the first %zu uploads compared with it (MARIAN_MOE_SOURCE_VERIFY=1)", p.verify_n);
++    }
++    LLAMA_LOG_WARN("llama_moe_source: Marian P3 (experimental) %s: ring %d x %.2f MiB, %s, %.2f MiB pinned%s, sector %llu, %s reads%s; "
++        "large-batch copies from the source too (0008: %d ring segments of %.2f MiB)\n",
+         p.type == LLAMA_MOE_MISS_SOURCE_TIER ? "tier" : "ring", p.ring_n, p.ring_slot/1024.0/1024.0, tier_desc.c_str(),
+         p.pinned_bytes/1024.0/1024.0, p.pageable_bytes > 0 ? format(" (+%.2f MiB PAGEABLE: pinning failed)", p.pageable_bytes/1024.0/1024.0).c_str() : "",
+-        (unsigned long long) p.sector, all_direct ? "unbuffered" : "SOME BUFFERED", verify_load ? ", verified against the memory map" : "");
++        (unsigned long long) p.sector, all_direct ? "unbuffered" : "SOME BUFFERED", verify_desc.c_str(), p.seg_n, p.seg_bytes/1024.0/1024.0);
+ }
+ 
+ llama_moe_source::~llama_moe_source() {
+@@ -619,6 +772,8 @@ void llama_moe_source::begin(int32_t il, bool decode, const int32_t * uniq, size
+     p.ring_next = 0;
+     p.step_read = 0;
+     p.gen++;
++    // the caller has just synchronized: no upload from the ring runs any more, large-batch segments included
++    std::fill(p.seg_pending.begin(), p.seg_pending.end(), 0);
+     if (decode && !p.tiers.empty() && p.group_of[il] >= 0) {
+         auto & c = p.count[il];
+         for (size_t i = 0; i < n_uniq; ++i) {
+@@ -648,8 +803,8 @@ char llama_moe_source::fill(ggml_backend_t backend, int32_t e, int32_t s) {
+             const auto & tensors = p.layers[p.il];
+             for (size_t k = 0; k < tensors.size(); ++k) {
+                 const uint64_t off = tensors[k].offset + (uint64_t) e*tensors[k].nb2;
+-                ggml_backend_tensor_set_async(backend, tensors[k].bank, t.base[ts] + p.region_off[p.il][k] + off % p.sector,
+-                    (size_t) s*tensors[k].nb2, tensors[k].nb2);
++                p.upload(backend, tensors[k].bank, t.base[ts] + p.region_off[p.il][k] + off % p.sector,
++                    (size_t) s*tensors[k].nb2, tensors[k].nb2, (const uint8_t *) tensors[k].host->data + (size_t) e*tensors[k].nb2);
+             }
+             t.busy[ts] = p.gen;
+             if (p.decode) {
+@@ -683,6 +838,7 @@ char llama_moe_source::fill(ggml_backend_t backend, int32_t e, int32_t s) {
+     }
+     p.read_expert(backend, e, s, p.ring + (size_t) p.ring_next++*p.ring_slot, -1, -1);
+     p.n_ring++;
++    p.ring_dirty = true;
+     return 'r';
+ }
+ 
+@@ -690,6 +846,66 @@ void llama_moe_source::end(ggml_backend_t backend) {
+     pimpl->drain(backend);
+ }
+ 
++void llama_moe_source::copy(ggml_backend_t backend, int32_t il, int32_t k, ggml_tensor * dst, int64_t e0, int64_t n, size_t pad, char * out) {
++    impl & p = *pimpl;
++    GGML_ASSERT(il >= 0 && il < (int32_t) p.layers.size() && k >= 0 && k < (int32_t) p.layers[il].size());
++    p.copy_prepare(backend);
++    p.n_copy_calls++;
++
++    const llama_moe_source_tensor & t = p.layers[il][k];
++    GGML_ASSERT(e0 >= 0 && e0 + n + (pad > 0 ? 1 : 0) <= t.host->ne[2] && pad <= t.nb2);
++    const int32_t g = p.group_of[il];
++    const bool use_tier = !p.tiers.empty() && g >= 0 && p.tiers[g].n_slots > 0;
++    const uint8_t * host = (const uint8_t *) t.host->data;
++
++    // the bytes still to read, [run_off, run_off + run_len) of the tensor and of dst: consecutive experts not in the tier
++    uint64_t run_off = 0;
++    uint64_t run_len = 0;
++    auto flush = [&]() {
++        if (run_len > 0) {
++            p.read_run(backend, t, dst, run_off, run_len);
++            run_len = 0;
++        }
++    };
++    // len bytes of expert e (the whole expert, or the padding), from the tier or into the run
++    auto add = [&](int64_t e, uint64_t len) -> char {
++        const uint64_t off = (uint64_t) e*t.nb2;
++        const int32_t  ts  = use_tier ? p.tier_slot[il][e] : -1;
++        if (ts >= 0) {
++            flush();
++            p.upload(backend, dst, p.tiers[g].base[ts] + p.region_off[il][k] + (t.offset + off) % p.sector, (size_t) off, (size_t) len, host + off);
++            return 't';
++        }
++        if (run_len > 0 && run_off + run_len != off) {
++            flush();
++        }
++        if (run_len == 0) {
++            run_off = off;
++        }
++        run_len += len;
++        return 'r';
++    };
++    for (int64_t i = 0; i < n; ++i) {
++        const char c = add(e0 + i, t.nb2);
++        if (c == 't') {
++            p.n_copy_tier++;
++        } else {
++            p.n_copy_ring++;
++        }
++        if (out != nullptr) {
++            out[i] = c;
++        }
++    }
++    if (pad > 0) {
++        add(e0 + n, pad);
++    }
++    flush();
++}
++
++void llama_moe_source::copy_end(ggml_backend_t backend) {
++    pimpl->drain(backend);
++}
++
+ size_t llama_moe_source::step_bytes_read() const {
+     return pimpl->step_read;
+ }
+@@ -697,10 +913,19 @@ size_t llama_moe_source::step_bytes_read() const {
+ void llama_moe_source::log_stats() const {
+     const impl & p = *pimpl;
+     const size_t n = p.n_tier + p.n_admit + p.n_ring;
+-    if (n == 0) {
++    const size_t n_copy = p.n_copy_tier + p.n_copy_ring;
++    if (n == 0 && n_copy == 0) {
+         return;
+     }
+     LLAMA_LOG_INFO("llama_moe_source: %zu misses: %zu from the tier (%.1f%%), %zu admitted, %zu through the ring, %.2f GiB read, "
+-        "%zu ring wraps, %zu failed reads, %zu mismatches\n", n, p.n_tier, 100.0*p.n_tier/n, p.n_admit, p.n_ring,
++        "%zu ring wraps, %zu failed reads, %zu mismatches\n", n, p.n_tier, n > 0 ? 100.0*p.n_tier/n : 0.0, p.n_admit, p.n_ring,
+         p.bytes_read/1024.0/1024.0/1024.0, p.n_wrap, p.n_fail, p.n_mismatch);
++    if (n_copy > 0) {
++        LLAMA_LOG_INFO("llama_moe_source: large-batch copies (0008): %zu expert tensors in %zu copies, %zu from the tier (%.1f%%), %zu read "
++            "in %zu reads, %.2f GiB read\n", n_copy, p.n_copy_calls, p.n_copy_tier, 100.0*p.n_copy_tier/n_copy, p.n_copy_ring,
++            p.n_copy_reads, p.copy_bytes_read/1024.0/1024.0/1024.0);
++    }
++    if (p.verify_all || p.verify_n > 0) {
++        LLAMA_LOG_INFO("llama_moe_source: %zu uploads compared with the memory map, %zu mismatches\n", p.n_verified, p.n_mismatch);
++    }
+ }
+diff --git a/src/llama-moe-source.h b/src/llama-moe-source.h
+index 837d15f6..60976558 100644
+--- a/src/llama-moe-source.h
++++ b/src/llama-moe-source.h
+@@ -16,6 +16,9 @@
+ // Only the source of the bytes changes: the bytes of the GGUF at the tensor's offsets, which are the bytes the memory map
+ // holds, reach the same bank slots, and the same kernels read them. A failed read falls back to the host tensor for that
+ // expert, with a counter and a warning.
++// Marian 0008: the large-batch selective copy (prefill) takes its uploads from the same source (copy / copy_end).
++// MARIAN_MOE_SOURCE_VERIFY: unset = load-time check; 0 = none; 1 = also compare the first MARIAN_MOE_SOURCE_VERIFY_N
++// uploads (default 100000) with the host tensor; all = compare every upload; a difference aborts.
+ 
+ enum llama_moe_miss_source_type {
+     LLAMA_MOE_MISS_SOURCE_MMAP = 0, // upstream: upload from the host tensor (usually the memory map)
+@@ -67,6 +70,18 @@ public:
+     // complete the reads of this step and issue their uploads, which finish before the caller's next synchronize
+     void end(ggml_backend_t backend);
+ 
++    // Marian 0008, the large-batch selective copy (ubatches above 32 tokens, sched_copy_experts): upload experts
++    // [e0, e0 + n) of expert tensor k of layer il into dst at e*nb2, then the first pad bytes of expert e0 + n (upstream's
++    // MMQ padding), each from the tier if it holds the expert, else read unbuffered through the staging ring (runs of
++    // consecutive experts in chunks of up to one ring segment, up to 16 reads in flight); never from the memory map,
++    // except a failed read, which is uploaded from the host tensor and counted. Same bytes, same place as upstream.
++    // out (optional): n chars, 't' tier or 'r' ring, where each expert came from
++    void copy(ggml_backend_t backend, int32_t il, int32_t k, ggml_tensor * dst, int64_t e0, int64_t n, size_t pad, char * out);
++
++    // after the last copy() of one selective copy: complete its reads and issue their uploads, which run on the backend's
++    // stream before the split's compute
++    void copy_end(ggml_backend_t backend);
++
+     // bytes read from the files since begin()
+     size_t step_bytes_read() const;
+ 
+-- 
+2.45.1.windows.1
+

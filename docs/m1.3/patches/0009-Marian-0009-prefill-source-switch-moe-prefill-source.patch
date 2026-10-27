@@ -1,0 +1,279 @@
+From 35a95578ad94868044c60e5d898a5e9e60c024c0 Mon Sep 17 00:00:00 2001
+From: tylnexttime <tylnexttime@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 11:19:38 +1100
+Subject: [PATCH] Marian 0009 prefill source switch: --moe-prefill-source
+ mmap|p3, default mmap, 0008's path only with p3
+
+0008 sent the large-batch selective copy (llama_context::sched_copy_experts, ubatches above 32 tokens) through the P3
+source whenever --moe-miss-source was ring or tier. E51 measured it on two models: 1.76x the tier's 16K prefill on
+Swift (drive-bound), but slower than the memory map when the model sits in the page cache (Gemma pp4k
+260 against 573 tok/s), so it ships opt-in. The new switch --moe-prefill-source (env LLAMA_ARG_MOE_PREFILL_SOURCE,
+llama_context_params.moe_prefill_source, 0 = mmap, 1 = p3) chooses it:
+
+  mmap (default): llama_moe_cache::has_miss_source returns false, so sched_copy_experts runs upstream's uploads from the
+  host tensor, the same calls with the same offsets and sizes as before 0008, whatever the miss source. The slot path
+  (decode, and the misses of small ubatches) still uses the ring or tier as in P3.
+  p3: 0008's behaviour, unchanged.
+
+p3 with --moe-miss-source mmap is refused: the context is not created and the error says p3 needs a ring or tier miss
+source (an invalid value is refused the same way). If the miss source is asked for but cannot be set up, its existing
+warning now adds "(nor --moe-prefill-source p3)". The P3 load line, which reports the miss source, now ends with
+"prefill source p3: large-batch copies from the source too (0008: ...)" or "prefill source mmap: large-batch copies from
+the host tensors (upstream)". llama_moe_source_params gains a prefill field (last member), used only for that line.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ common/arg.cpp           | 14 ++++++++++++++
+ common/common.cpp        |  1 +
+ common/common.h          |  2 ++
+ include/llama.h          |  4 ++++
+ src/llama-context.cpp    | 14 +++++++++++++-
+ src/llama-cparams.h      |  1 +
+ src/llama-moe-cache.cpp  | 13 ++++++++++---
+ src/llama-moe-cache.h    |  3 ++-
+ src/llama-moe-source.cpp |  9 ++++++---
+ src/llama-moe-source.h   | 10 ++++++++++
+ 10 files changed, 63 insertions(+), 8 deletions(-)
+
+diff --git a/common/arg.cpp b/common/arg.cpp
+index 6c75e585..551d4527 100644
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -2811,6 +2811,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+             }
+         }
+     ).set_env("LLAMA_ARG_MOE_MISS_SOURCE"));
++    add_opt(common_arg(
++        {"--moe-prefill-source"}, "{mmap,p3}",
++        "Marian 0009 [EXPERIMENTAL]: where ubatches above 32 tokens upload the experts the MoE cache does not hold from:\n"
++        "mmap = the host tensors, upstream (default), p3 = the --moe-miss-source ring or tier (refused with mmap)",
++        [](common_params & params, const std::string & value) {
++            if (value == "mmap") {
++                params.moe_prefill_source = 0;
++            } else if (value == "p3") {
++                params.moe_prefill_source = 1;
++            } else {
++                throw std::invalid_argument("invalid value");
++            }
++        }
++    ).set_env("LLAMA_ARG_MOE_PREFILL_SOURCE"));
+     add_opt(common_arg(
+         {"--moe-tier-mib"}, "N",
+         "Marian P3 [EXPERIMENTAL]: pinned RAM tier in MiB for --moe-miss-source tier (default: 0)",
+diff --git a/common/common.cpp b/common/common.cpp
+index 478da80b..8c6a2a0f 100644
+--- a/common/common.cpp
++++ b/common/common.cpp
+@@ -1764,6 +1764,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
+     cparams.moe_miss_source = params.moe_miss_source;
+     cparams.moe_tier_size   = params.moe_tier_size;
+     cparams.moe_ring_size   = params.moe_ring_size;
++    cparams.moe_prefill_source = params.moe_prefill_source;
+ 
+     return cparams;
+ }
+diff --git a/common/common.h b/common/common.h
+index 877120f0..2113a4bc 100644
+--- a/common/common.h
++++ b/common/common.h
+@@ -603,6 +603,8 @@ struct common_params {
+     int32_t moe_miss_source = 0;
+     size_t  moe_tier_size   = 0; // bytes
+     size_t  moe_ring_size   = 0; // bytes, 0 = 64 MiB
++    // Marian 0009: 0 = ubatches above 32 tokens upload from the host tensors (upstream), 1 = from the P3 source (0008)
++    int32_t moe_prefill_source = 0;
+ 
+     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
+ 
+diff --git a/include/llama.h b/include/llama.h
+index d75405a0..ebae9355 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -405,6 +405,10 @@ extern "C" {
+         size_t  moe_tier_size;
+         size_t  moe_ring_size; // 0 = 64 MiB
+ 
++        // Marian 0009: where ubatches above 32 tokens take the experts the cache does not hold [EXPERIMENTAL]
++        // 0 = the host tensors (upstream, default), 1 = the P3 source (needs moe_miss_source 1 or 2, else the context is refused)
++        int32_t moe_prefill_source;
++
+         // Abort callback
+         // if it returns true, execution of llama_decode() will be aborted
+         // currently works only with CPU execution
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 5ede13d5..e2874311 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -377,6 +377,15 @@ llama_context::llama_context(
+     cparams.moe_tier_size   = params.moe_tier_size;
+     cparams.moe_ring_size   = params.moe_ring_size;
+ 
++    // Marian 0009: p3 needs a P3 source to take the large-batch misses from; refused rather than silently ignored
++    cparams.moe_prefill_source = params.moe_prefill_source;
++    if (cparams.moe_prefill_source != LLAMA_MOE_PREFILL_SOURCE_MMAP && cparams.moe_prefill_source != LLAMA_MOE_PREFILL_SOURCE_P3) {
++        throw std::runtime_error(format("invalid moe_prefill_source %d (0 = mmap, 1 = p3)", cparams.moe_prefill_source));
++    }
++    if (cparams.moe_prefill_source == LLAMA_MOE_PREFILL_SOURCE_P3 && cparams.moe_miss_source == LLAMA_MOE_MISS_SOURCE_MMAP) {
++        throw std::runtime_error("--moe-prefill-source p3 needs --moe-miss-source ring or tier: with mmap there is no P3 source to take the large-batch misses from");
++    }
++
+     // initialized later
+     cparams.pipeline_parallel = false;
+     cparams.training = false;
+@@ -571,6 +580,7 @@ llama_context::llama_context(
+             source_params.type      = cparams.moe_miss_source;
+             source_params.tier_size = cparams.moe_tier_size;
+             source_params.ring_size = cparams.moe_ring_size;
++            source_params.prefill   = cparams.moe_prefill_source;
+             moe_cache = std::make_unique<llama_moe_cache>(model, model.no_alloc(), backend_ptrs, backend_buft, cparams.moe_cache_size, cparams.n_ubatch, cparams.op_offload,
+                     source_params);
+         }
+@@ -2820,7 +2830,8 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+     const int64_t n_expert    = src->ne[2];
+     const size_t  expert_size = src->nb[2];
+ 
+-    // Marian 0008: with a P3 miss source (--moe-miss-source ring or tier) the experts not copied from the cache are uploaded
++    // Marian 0008 (0009: only with --moe-prefill-source p3; with mmap, the default, p3 is false and this is upstream's code):
++    // with a P3 miss source (--moe-miss-source ring or tier) the experts not copied from the cache are uploaded
+     // from the pinned tier or read unbuffered through the staging ring, never from the memory map; the same bytes to the
+     // same offsets of dst as below, all of it queued on the backend's stream before the split's compute
+     const bool p3 = lctx->moe_cache && lctx->moe_cache->has_miss_source(backend, src);
+@@ -4111,6 +4122,7 @@ llama_context_params llama_context_default_params() {
+         /*.moe_miss_source             =*/ 0,
+         /*.moe_tier_size               =*/ 0,
+         /*.moe_ring_size               =*/ 0,
++        /*.moe_prefill_source          =*/ 0,
+         /*.abort_callback              =*/ nullptr,
+         /*.abort_callback_data         =*/ nullptr,
+         /*.embeddings                  =*/ false,
+diff --git a/src/llama-cparams.h b/src/llama-cparams.h
+index 57181a87..f17cbcd5 100644
+--- a/src/llama-cparams.h
++++ b/src/llama-cparams.h
+@@ -63,6 +63,7 @@ struct llama_cparams {
+     int32_t moe_miss_source;
+     size_t  moe_tier_size;
+     size_t  moe_ring_size;
++    int32_t moe_prefill_source; // Marian 0009
+ 
+     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
+ 
+diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
+index eed658fa..8972451c 100644
+--- a/src/llama-moe-cache.cpp
++++ b/src/llama-moe-cache.cpp
+@@ -330,6 +330,9 @@ struct llama_moe_cache::impl {
+     // Marian P3: where misses are uploaded from, nullptr = the host tensors (upstream)
+     std::unique_ptr<llama_moe_source> source;
+ 
++    // Marian 0009: whether the large-batch selective copy takes its misses from the source (--moe-prefill-source p3)
++    bool prefill_p3 = false;
++
+     impl(const llama_model & model, bool no_alloc, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size,
+             uint32_t n_ubatch, bool op_offload, const llama_moe_source_params & source_params) :
+             n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()) {
+@@ -617,8 +620,9 @@ struct llama_moe_cache::impl {
+         if (sp.type == LLAMA_MOE_MISS_SOURCE_MMAP) {
+             return;
+         }
+-        auto skip = [](const std::string & why) {
+-            LLAMA_LOG_WARN("llama_moe_cache: --moe-miss-source is not used, misses are uploaded from the host tensors: %s\n", why.c_str());
++        auto skip = [&sp](const std::string & why) {
++            LLAMA_LOG_WARN("llama_moe_cache: --moe-miss-source is not used%s, misses are uploaded from the host tensors: %s\n",
++                sp.prefill == LLAMA_MOE_PREFILL_SOURCE_P3 ? " (nor --moe-prefill-source p3)" : "", why.c_str());
+         };
+         int32_t id = -1;
+         for (const group & g : groups) {
+@@ -662,7 +666,9 @@ struct llama_moe_cache::impl {
+         if (!source->error().empty()) {
+             skip(source->error());
+             source.reset();
++            return;
+         }
++        prefill_p3 = sp.prefill == LLAMA_MOE_PREFILL_SOURCE_P3;
+     }
+ 
+     ggml_backend_t backend(int32_t il) const {
+@@ -727,8 +733,9 @@ struct llama_moe_cache::impl {
+     }
+ 
+     // Marian 0008: the large-batch selective copy takes its uploads from the P3 source
++    // Marian 0009: only with --moe-prefill-source p3; with mmap (the default) the large-batch path is upstream's code
+     bool has_miss_source(ggml_backend_t backend, const ggml_tensor * w) const {
+-        if (!source) {
++        if (!source || !prefill_p3) {
+             return false;
+         }
+         const auto it = bindings.find(w);
+diff --git a/src/llama-moe-cache.h b/src/llama-moe-cache.h
+index 2b606830..3f034b7f 100644
+--- a/src/llama-moe-cache.h
++++ b/src/llama-moe-cache.h
+@@ -42,7 +42,8 @@ public:
+     int64_t copy_experts(ggml_backend_t backend, const ggml_tensor * w, ggml_tensor * dst, int64_t e, int64_t last);
+ 
+     // Marian 0008: whether the large-batch selective copy of host expert tensor w on this backend uploads the experts it
+-    // does not copy from the cache from the P3 miss source (--moe-miss-source ring or tier) instead of the host tensor
++    // does not copy from the cache from the P3 miss source (--moe-miss-source ring or tier) instead of the host tensor;
++    // Marian 0009: only with --moe-prefill-source p3, false with mmap (the default)
+     bool has_miss_source(ggml_backend_t backend, const ggml_tensor * w) const;
+ 
+     // Marian 0008, only if has_miss_source: upload experts [e0, e0 + n) of w, then the first pad bytes of expert e0 + n,
+diff --git a/src/llama-moe-source.cpp b/src/llama-moe-source.cpp
+index bc66a3f9..0080e855 100644
+--- a/src/llama-moe-source.cpp
++++ b/src/llama-moe-source.cpp
+@@ -750,11 +750,14 @@ llama_moe_source::llama_moe_source(const llama_moe_source_params & params, ggml_
+     } else if (p.verify_n > 0) {
+         verify_desc += format(", the first %zu uploads compared with it (MARIAN_MOE_SOURCE_VERIFY=1)", p.verify_n);
+     }
+-    LLAMA_LOG_WARN("llama_moe_source: Marian P3 (experimental) %s: ring %d x %.2f MiB, %s, %.2f MiB pinned%s, sector %llu, %s reads%s; "
+-        "large-batch copies from the source too (0008: %d ring segments of %.2f MiB)\n",
++    // Marian 0009: the prefill source is reported here, beside the miss source
++    const std::string prefill_desc = params.prefill == LLAMA_MOE_PREFILL_SOURCE_P3
++        ? format("prefill source p3: large-batch copies from the source too (0008: %d ring segments of %.2f MiB)", p.seg_n, p.seg_bytes/1024.0/1024.0)
++        : std::string("prefill source mmap: large-batch copies from the host tensors (upstream)");
++    LLAMA_LOG_WARN("llama_moe_source: Marian P3 (experimental) %s: ring %d x %.2f MiB, %s, %.2f MiB pinned%s, sector %llu, %s reads%s; %s\n",
+         p.type == LLAMA_MOE_MISS_SOURCE_TIER ? "tier" : "ring", p.ring_n, p.ring_slot/1024.0/1024.0, tier_desc.c_str(),
+         p.pinned_bytes/1024.0/1024.0, p.pageable_bytes > 0 ? format(" (+%.2f MiB PAGEABLE: pinning failed)", p.pageable_bytes/1024.0/1024.0).c_str() : "",
+-        (unsigned long long) p.sector, all_direct ? "unbuffered" : "SOME BUFFERED", verify_desc.c_str(), p.seg_n, p.seg_bytes/1024.0/1024.0);
++        (unsigned long long) p.sector, all_direct ? "unbuffered" : "SOME BUFFERED", verify_desc.c_str(), prefill_desc.c_str());
+ }
+ 
+ llama_moe_source::~llama_moe_source() {
+diff --git a/src/llama-moe-source.h b/src/llama-moe-source.h
+index 60976558..46b4bb48 100644
+--- a/src/llama-moe-source.h
++++ b/src/llama-moe-source.h
+@@ -17,6 +17,7 @@
+ // holds, reach the same bank slots, and the same kernels read them. A failed read falls back to the host tensor for that
+ // expert, with a counter and a warning.
+ // Marian 0008: the large-batch selective copy (prefill) takes its uploads from the same source (copy / copy_end).
++// Marian 0009: only with --moe-prefill-source p3 (the caller decides; the source only reports the choice at load).
+ // MARIAN_MOE_SOURCE_VERIFY: unset = load-time check; 0 = none; 1 = also compare the first MARIAN_MOE_SOURCE_VERIFY_N
+ // uploads (default 100000) with the host tensor; all = compare every upload; a difference aborts.
+ 
+@@ -26,11 +27,20 @@ enum llama_moe_miss_source_type {
+     LLAMA_MOE_MISS_SOURCE_TIER = 2,
+ };
+ 
++// Marian 0009: where the large-batch selective copy (ubatches above 32 tokens) takes the experts it does not copy from the
++// VRAM cache: mmap = the host tensors, upstream's code (default, whatever the miss source); p3 = the P3 source (0008),
++// which needs miss source ring or tier
++enum llama_moe_prefill_source_type {
++    LLAMA_MOE_PREFILL_SOURCE_MMAP = 0,
++    LLAMA_MOE_PREFILL_SOURCE_P3   = 1,
++};
++
+ struct llama_moe_source_params {
+     int32_t type      = LLAMA_MOE_MISS_SOURCE_MMAP;
+     size_t  ring_size = 0; // pinned staging ring in bytes, 0 = 64 MiB
+     size_t  tier_size = 0; // pinned RAM tier in bytes (type TIER); Marian 0007: capped at min(this, 50% of physical RAM,
+                            // commit room minus 4 GiB), pinned in chunks of at most 1 GiB, stops growing at a failed chunk
++    int32_t prefill   = LLAMA_MOE_PREFILL_SOURCE_MMAP; // Marian 0009: the large-batch path's source, reported at load
+ };
+ 
+ // one expert tensor of a cached layer: where it is in its GGUF file and the bank its experts are uploaded to
+-- 
+2.45.1.windows.1
+
