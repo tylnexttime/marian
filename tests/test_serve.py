@@ -153,9 +153,28 @@ class Confirm(unittest.TestCase):
         self.assertIsNone(lc.add({"predicted_n": 4, "predicted_ms": 100}))           # too short to count
         self.assertIsNone(lc.add({"predicted_n": 64, "predicted_ms": 2000}))
         r = lc.add({"predicted_n": 64, "predicted_ms": 2000})                         # 32 tok/s: 20% below 40
-        self.assertTrue(r["slow"] and got and "below the profiled" in r["message"])
+        self.assertTrue(r["below_profile"] and got and "20% below profile" in r["message"])
+        self.assertNotIn("slow", r)                     # serve's loop runs under calibrate's figure: not flagged slow
+        self.assertIn("register E53", r["message"])
         self.assertIsNone(lc.add({"predicted_n": 64, "predicted_ms": 1}))              # reports once
         self.assertFalse(confirm.live_verdict(36.0, 40.0, 0.15)["slow"])
+
+    def test_live_verdict_wording_both_directions(self):
+        above = confirm.live_verdict(48.0, 40.0, 0.15)                                # 20% faster than the profile
+        self.assertFalse(above["slow"])
+        self.assertIn("20% above", above["message"])
+        self.assertIn("at or above the profile", above["message"])
+        self.assertNotIn("within", above["message"])                 # the old wording: "(+20%): within 15%"
+        within = confirm.live_verdict(36.0, 40.0, 0.15)                               # 10% slower: inside 15%
+        self.assertIn("10% below", within["message"])
+        self.assertIn("within the 15% threshold", within["message"])
+        slow = confirm.live_verdict(30.0, 40.0, 0.15)                                 # 25% slower: the --confirm path
+        self.assertTrue(slow["slow"])
+        self.assertIn("25% below the profiled", slow["message"])
+        served = confirm.live_verdict(30.0, 40.0, 0.15, served=True)                  # the same rate, served
+        self.assertEqual((served["below_profile"], "slow" in served), (True, False))
+        self.assertIn("25% below profile", served["message"])
+        self.assertIn("at or above", confirm.live_verdict(40.0, 40.0, 0.15, served=True)["message"])
 
     def test_ab_with_a_fake_engine_and_the_record(self):
         class Engine:

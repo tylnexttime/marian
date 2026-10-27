@@ -55,22 +55,38 @@ def today() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
 
-def live_verdict(live_tps: float, profiled_tps: float | None, slow: float) -> dict:
-    """Is a live decode rate more than `slow` below the profiled one?"""
+SERVE_GAP = "serve's request loop measured 10-16% under calibrate's decode figure on a clean machine (register E53)"
+
+
+def live_verdict(live_tps: float, profiled_tps: float | None, slow: float, served: bool = False) -> dict:
+    """Is a live decode rate more than `slow` below the profiled one? `served`: the rate comes from serve's own
+    request loop (the passive check), which runs below calibrate's figure even on a clean machine (SERVE_GAP), so the
+    flag is `below_profile`, not `slow`: a gap of that size is expected, not a fault. The `--confirm` windows use the
+    calibrate-style probe and keep the `slow` flag."""
+    flag = "below_profile" if served else "slow"
     if not profiled_tps:
-        return {"live_tps": round(live_tps, 2), "profiled_tps": profiled_tps, "slow": False,
+        return {"live_tps": round(live_tps, 2), "profiled_tps": profiled_tps, flag: False,
                 "message": "the row has no profiled decode rate to compare with"}
     ratio = live_tps / profiled_tps
-    out = {"live_tps": round(live_tps, 2), "profiled_tps": profiled_tps, "ratio": round(ratio, 3),
-           "slow": ratio < 1 - slow}
-    if out["slow"]:
-        out["message"] = (f"live decode {live_tps:.1f} tok/s is {100 * (1 - ratio):.0f}% below the profiled "
+    below = ratio < 1 - slow
+    out = {"live_tps": round(live_tps, 2), "profiled_tps": profiled_tps, "ratio": round(ratio, 3), flag: below}
+    pct = abs(100 * (1 - ratio))
+    if below and served:
+        out["message"] = (f"live decode {live_tps:.1f} tok/s is {pct:.0f}% below profile ({profiled_tps:.1f} tok/s; "
+                          f"threshold {100 * slow:.0f}%). {SERVE_GAP}, so a gap near that size is expected; a much "
+                          "larger one means the desktop changed: `marian serve --confirm` A/B-tests the plan against "
+                          "the runner-up, `marian calibrate` measures again")
+    elif below:
+        out["message"] = (f"live decode {live_tps:.1f} tok/s is {pct:.0f}% below the profiled "
                           f"{profiled_tps:.1f} tok/s for this configuration (threshold {100 * slow:.0f}%): the desktop may "
                           "have changed since profiling; `marian serve --confirm` A/B-tests it against the runner-up, "
                           "`marian calibrate` measures again")
+    elif ratio >= 1:
+        out["message"] = (f"live decode {live_tps:.1f} tok/s against {profiled_tps:.1f} profiled "
+                          f"({pct:.0f}% above): at or above the profile")
     else:
         out["message"] = (f"live decode {live_tps:.1f} tok/s against {profiled_tps:.1f} profiled "
-                          f"({100 * (ratio - 1):+.0f}%): within {100 * slow:.0f}%")
+                          f"({pct:.0f}% below): within the {100 * slow:.0f}% threshold")
     return out
 
 
@@ -96,7 +112,8 @@ class LiveCheck:
         if len(self.samples) < self.n:
             return None
         rate = sum(x for x, _ in self.samples) / (sum(y for _, y in self.samples) / 1000)
-        self.result = dict(live_verdict(rate, self.profiled, self.slow), answers=len(self.samples), date=today())
+        self.result = dict(live_verdict(rate, self.profiled, self.slow, served=True), answers=len(self.samples),
+                           date=today())
         if self.on_done:
             self.on_done(self.result)
         return self.result
