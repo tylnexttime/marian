@@ -73,7 +73,8 @@ These are why a measuring tool matters. Sources and conditions for every figure 
   with the prefill patches) confirmed it: Marian's exact plan decoded 6.7 tok/s against stock's 12.0 and prefilled
   23 against 978 at 4K, and the planner, unrestricted, picks stock there. One exact row that the plan's safety
   margin excluded decoded 31.4 tok/s, 2.6x stock, but still prefilled 5x slower. A measuring tool that tells you the plain option wins is
-  doing its job.
+  doing its job. The planner no longer loses that row to a small VRAM drift (register E63), and whether exact Marian
+  wins decode after short prompts on that laptop is the next registered milestone (M1.6, E64), not yet run.
 
 ## How it fits together
 
@@ -285,7 +286,9 @@ Be warned; this is research code.
   it follows, so it can only catch large differences.
 - **Calibration v1 measures, then trusts its measurement.** The planner restores cache budgets, miss sources, tier
   sizes and thread counts into the launch configuration, and `serve` checks the chosen row against the VRAM and RAM
-  free at launch. The cliff finder assumes decode speed rises with the cache budget until the cliff. The cache arms
+  free at launch. The cliff finder assumes decode speed rises with the cache budget until the cliff. It measures
+each budget once, so it cannot rank budgets a few percent apart: in E63 a rung 455 MiB below the best decoded 4%
+faster than the best, and the plan chose it. The cache arms
   have run once on one machine (the reference laptop), with one model, and with the cache capped at 2,500 MiB so that
   the miss sources had misses to serve: the bisection itself has only run against synthetic speed and VRAM curves in
   the tests, not against a real paging cliff. That smoke ran the M1.2 build, at the old pin (`a37cc461`), not the
@@ -415,7 +418,10 @@ each context and KV type also gets **cache arms** (M1.3). A cliff finder bisects
 exactness floor (below it the fork refuses to start, which is recorded as a refusal, not a crash) and the budget that
 caches every expert, capped by the VRAM left beside the rest of the model. At the best budget it measures the staging
 ring and a small ladder of pinned RAM tier sizes, never pinning more than the RAM available minus a floor, because
-pinned memory is RAM the desktop cannot page. Each row records whether it is **exact-class** (every expert computed
+pinned memory is RAM the desktop cannot page. Then it measures two **drift rungs**, 512 and 1,024 MiB below the best
+budget (`--drift-rungs`), with the sources that survived there: the best budget fits with nothing to spare, and
+without rungs a small drop in free VRAM before launch left the planner only the floor row (E50: 7.4 against 19.8
+tok/s at calibration). With them, a planted 300 MiB drift moves the exact plan by at most one rung (register E63). Each row records whether it is **exact-class** (every expert computed
 on the GPU: full offload or any cache arm) or not (stock `-ncmoe` above 0, which changes answers), the RAM available
 before and at its lowest, commit headroom, the server's peak working set and commit, and what the fork's log said.
 `--max-cache-mib` caps the cache, `--ram-floor` sets the floor, `--no-cache` skips the arms.
@@ -500,7 +506,8 @@ The living roadmap, with the evidence behind each item and the dev debt, is
 short: rebase onto current upstream (done); make prefill the main target (expert page faults were the cost, not
 Swift's embedding table; prefill misses can now come from P3, opt-in, and a declared ubatch of 2048 reached stock's
 prefill exactly; next, fewer bytes per prompt); calibration v1 with Windows pinning and RAM-safety rules; then the
-8 GB laptop under RAM pressure (measured 28/10: stock wins it, and the planner picks stock). The milestones from
+8 GB laptop under RAM pressure (measured 28/10: stock wins it, and the planner picks stock); then, registered 28/10
+and not yet run, exact decode after short prompts on that laptop (M1.6). The milestones from
 [DESIGN-M1 section 10](docs/design/DESIGN-M1.md), reshaped by what M1.0 measured:
 
 - **M1.2:** a ranked policy (ranked core, warm start, doorkeeper, transient slots, budgets by need), with a bitwise

@@ -578,7 +578,10 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 - **The build:** `/EHsc` (C++ exception unwinding) is on from M1.3. E57 (A32) found every answer identical with and
   without it.
 - **The 8 GB milestone (E50)** ran on 28/10 and failed, as predicted: stock wins the gate case on an 8 GB card, and
-  the planner picks stock (A36). Next there: a cliff finder that does not drop to the floor row on a small drift.
+  the planner picks stock (A36). The cliff finder now measures drift rungs below its best budget, so a small VRAM
+  drift costs one rung, not the ladder (E63, A39). Next there: **M1.6 (E64), registered 28/10, not yet run**: exact
+  decode after short prompts on the same 8 GB laptop, the plan chosen by a calibration whose probe matches that
+  workload, against a fresh stock sweep whose three fastest settings run twice.
 - **Exactness, the rest of the way:**
   - the single-layer harness (E0);
   - the kernel-boundary parity matrix;
@@ -635,6 +638,8 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 | 28/10 | prediction: NVIDIA's "Prefer maximum performance" brings decode back, about 45% (E62) | no effect (0.95x) and no clock rise; restored |
 | 28/10 | prediction: 25 GiB of RAM held makes the commit-room cap bind, 70% (E61's K2) | the page file kept commit room above the 50% cap; not reached |
 | 28/10 | `pwsh -File script.ps1 -Tags a,b` passes "a,b" as one string, so E62's first P call ran one arm | renamed and the second arm run on its own; disclosed in E62 |
+| 28/10 | E63's drift rungs were first rounded down to 64 MiB, which made a 551 MiB step: more than the one-row bound | caught by the new test before any GPU run; rounded up instead, disclosed in E63 |
+| 28/10 | prediction: E63 PASS, about 75% (the risk: a rung's measured share not stepping with its budget) | right; the shares stepped (7,485 and 6,847 MiB at 3,776 and 3,264), though the 300 MiB case moved nothing because the plan already chose a rung |
 
 ---
 
@@ -1566,3 +1571,24 @@ context 16,384; answers compared with the all-VRAM run of E58.
 Taught us: the 50% cap works on the GPU, exactly. The commit-room cap and the failed-chunk stop cannot be reached here
 by holding memory: the page file keeps commit room high, and Windows pins by paging other memory out. Those two
 branches need a test hook in the fork.
+
+#### A39. E63: drift rungs keep a small VRAM drift from dropping the exact plan to its floor
+
+Conditions: Gemma 4 26B-A4B IQ4_XS, context 8,192, the 8 GB cap held by the active ballast and 25 GB of RAM in use
+(E50's setting); `marian calibrate --probe-prompt 4096`, then the planted check: plan `--exact-only` at F0 (the card's
+total minus the lowest baseline any exact row recorded) and at F0 minus a drift. One row = one calibration step, at
+most 512 MiB.
+
+| Profile | Cache budgets measured (MiB) | Plan at F0 | Plan at F0 - 300 | Moved |
+|---|---|---|---|---|
+| E50's (two-point finder) | 866, 4,103 | ring at 4,103, 19.79 tok/s | cache at 866, 7.37 | 3,237 MiB: fail |
+| E63's (two drift rungs) | 866, 3,264, 3,776, 4,231 | cache at 3,776, 20.20 | cache at 3,776, 20.20 | 0: pass |
+
+Reported: at F0 - 600 the plan took the 3,264 rung (one row); at the free VRAM read at plan time (455 MiB under F0)
+it took the ring with P3 prefill at 3,776 (18.66). The 300 MiB case moved nothing because the plan already preferred
+the first rung, 4% faster than the best budget on one probe each: the rule is met, its stronger form untested.
+
+Taught us: a cliff finder that stops at the first budget that fits hands the planner a cliff of its own, because that
+budget fits with nothing to spare. A rung or two below it costs four probes. And one probe per budget cannot rank
+budgets a few percent apart. Stock's calibration rows also moved between E50 and E63 under the same ballast targets
+(best 20.5 then 24.5 tok/s), which is why M1.6's stock sweep runs its three fastest settings twice.
