@@ -508,8 +508,8 @@ prefill exactly; next, fewer bytes per prompt); calibration v1 with Windows pinn
 - **M1.3:** calibration v1. Built (Python): the VRAM cliff finder, miss sources in a RAM safety envelope, the CPU
   thread sweep, the plan, the calibration gate, launch checks, the `--stock` rollback, the diagnostics bundle, live
   confirmation, and serving through a proxy with a memory governor (watch by default since register E53). Still to
-  do: learned counts, a live run of the governor's `restart` mode, a test that makes 0007's tier cap trigger, and a
-  live run of the calibration rows for the prefill source and a declared ubatch (built 27/10/2026, offline tests
+  do: learned counts, a live run of the governor's `restart` mode, a test hook that drives 0007's commit cap and a failed pinned chunk (its 50%
+  cap triggered and held on 28/10, register E61), and a live run of the calibration rows for the prefill source and a declared ubatch (built 27/10/2026, offline tests
   only).
 - **M1.4:** real hardware: a real 8 GB GPU, Linux, a slower link and drive.
 - **M2:** the full expert source (prefill included), removing the per-layer drain, look-ahead prefetch.

@@ -570,7 +570,7 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 - **M1.3's exit, not met (E53):**
   - E55, the governor's opt-in `restart` mode against a real competitor, with the shared-memory clause measured
     against the arm's own baseline;
-  - a test that makes 0007's tier cap trigger;
+  - 0007's commit cap and a failed pinned chunk, through a test hook (its 50% cap triggered and held on 28/10, A38);
   - learned counts.
 - **Rebases:** weekly, or at once when upstream touches what we run, each with an E48-style exactness check. A
   daily upstream watch says when (ROADMAP section 1). The first reading, on the evening of 27/10, flagged three
@@ -633,6 +633,7 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 | 28/10 | E50's first calibration ran with the 8 GB ballast evicted by Windows (a server used 12 GB) | voided before any round; an active ballast built and checked by a planted test (I1-I3, I3 added after I2 and disclosed); an audit cleared the earlier 8 GB results |
 | 28/10 | E50's exact plan dropped to its floor row on a 263 MiB drift and a 300 MiB margin | M ran as the rule said (no hand tuning); the excluded row was run beside it, reported only (31.4 against M's 6.7); debt row 20 |
 | 28/10 | prediction: NVIDIA's "Prefer maximum performance" brings decode back, about 45% (E62) | no effect (0.95x) and no clock rise; restored |
+| 28/10 | prediction: 25 GiB of RAM held makes the commit-room cap bind, 70% (E61's K2) | the page file kept commit room above the 50% cap; not reached |
 | 28/10 | `pwsh -File script.ps1 -Tags a,b` passes "a,b" as one string, so E62's first P call ran one arm | renamed and the second arm run on its own; disclosed in E62 |
 
 ---
@@ -1550,3 +1551,18 @@ busy GPU samples still carry the "idle" clock reason, at about 34 W of 115.
 
 Taught us: the GPU's clock-down between decode bursts is real, but this driver setting does not reach a CUDA server,
 so row 17's cause stays narrowed, not named.
+
+#### A38. E61: 0007's tier cap on the GPU
+
+Conditions: Gemma 4 26B-A4B IQ4_XS, cache 2,500 MiB, `--moe-miss-source tier`, ten decode prompts at 128 tokens,
+context 16,384; answers compared with the all-VRAM run of E58.
+
+| Arm | Request | RAM held | Cap and its reason | Pinned | Answers |
+|---|---|---|---|---|---|
+| K1 | 30,000 MiB | none | 16,203 MiB, 50% of RAM | 10,536 MiB (the model's whole expert set) | identical |
+| K2 | 30,000 MiB | 25 GiB | 16,203 MiB, 50% of RAM (commit room 20,499 MiB) | 10,536 MiB | identical |
+| K3 | 6,144 MiB | 29 GiB | none needed (commit room 13,579 MiB) | 6,139 MiB, no chunk failed | identical |
+
+Taught us: the 50% cap works on the GPU, exactly. The commit-room cap and the failed-chunk stop cannot be reached here
+by holding memory: the page file keeps commit room high, and Windows pins by paging other memory out. Those two
+branches need a test hook in the fork.
