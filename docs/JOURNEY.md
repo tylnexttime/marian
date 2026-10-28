@@ -632,6 +632,8 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 | 28/10 | prediction: E60 gives MACHINE (65%); its threshold 0.85 x 15.15 = 12.9 | the run gave 12.98: NO DECISION by 0.08, with CODE ruled out; a threshold set from the outlier, not from the slow state |
 | 28/10 | E50's first calibration ran with the 8 GB ballast evicted by Windows (a server used 12 GB) | voided before any round; an active ballast built and checked by a planted test (I1-I3, I3 added after I2 and disclosed); an audit cleared the earlier 8 GB results |
 | 28/10 | E50's exact plan dropped to its floor row on a 263 MiB drift and a 300 MiB margin | M ran as the rule said (no hand tuning); the excluded row was run beside it, reported only (31.4 against M's 6.7); debt row 20 |
+| 28/10 | prediction: NVIDIA's "Prefer maximum performance" brings decode back, about 45% (E62) | no effect (0.95x) and no clock rise; restored |
+| 28/10 | `pwsh -File script.ps1 -Tags a,b` passes "a,b" as one string, so E62's first P call ran one arm | renamed and the second arm run on its own; disclosed in E62 |
 
 ---
 
@@ -1531,3 +1533,20 @@ says so. The plan dropped from the fast exact row to its floor row on a 263 MiB 
 margin, because the cliff finder had probed only two budgets: debt row 20. And the excluded row, exact, decoded at
 2.6x stock after short prompts: on an 8 GB card Marian's case is decode, not prefill. Making that claim needs its own
 registered rule.
+
+#### A37. E62: NVIDIA's power-management mode is not the lever
+
+Conditions: Swift T8 as in A35, interleaved B P P B. B = the setting as found (global "Normal", no profile for
+llama-server); P = a program profile for llama-server with "Prefer maximum performance", made by hand in the NVIDIA
+Control Panel and removed afterwards.
+
+| State | Warm decode (two runs) | SM clock during decode (MHz) |
+|---|---|---|
+| B (as found) | 11.76, 11.53 | 1,125, 1,185 |
+| P (prefer maximum performance) | 10.13, 12.04 | 1,020, 1,200 |
+
+Verdict as registered: NO EFFECT (0.951, at the edge of the 0.95-1.05 band); restored. In every run about 98% of the
+busy GPU samples still carry the "idle" clock reason, at about 34 W of 115.
+
+Taught us: the GPU's clock-down between decode bursts is real, but this driver setting does not reach a CUDA server,
+so row 17's cause stays narrowed, not named.

@@ -261,7 +261,8 @@ Be warned; this is research code.
   so no code change caused it. In the slower runs the GPU side and the host side slowed together, with the same bytes
   moved and the same CPU and GPU utilisation; one 2x slump (7.8 against 16.5 tok/s, stock) came with the CPU held
   below its base clock. GPU logs since 28/10 show the GPU idling between bursts at 800-1,200 MHz during decode, so the
-  platform's power state is the leading suspect. Since 28/10 every registered speed run first runs
+  platform's power state is the leading suspect. One part of it is ruled out: register E62 set NVIDIA's "Prefer
+  maximum performance" for llama-server only, and decode and clocks did not move (0.95x, the setting restored). Since 28/10 every registered speed run first runs
   `tools/prerun/prerun_check.py` (power plan and source, thermal limits, CPU and drive probes, GPU clocks, power
   limit and clock-event reasons, free memory, the busiest processes) and logs GPU clocks beside the run; comparisons
   that matter are made inside one session, interleaved. Figures from different sessions in this README can differ
