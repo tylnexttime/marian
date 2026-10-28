@@ -577,8 +577,8 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
   commits, one of them a CUDA scale-kernel change, so the next rebase comes soon.
 - **The build:** `/EHsc` (C++ exception unwinding) is on from M1.3. E57 (A32) found every answer identical with and
   without it.
-- **The 8 GB milestone (E50)** runs once the prefill track lands. Its rule is already written, and so is our
-  prediction that the code as it stood that morning fails it. A declared-ubatch row is reported beside it.
+- **The 8 GB milestone (E50)** ran on 28/10 and failed, as predicted: stock wins the gate case on an 8 GB card, and
+  the planner picks stock (A36). Next there: a cliff finder that does not drop to the floor row on a small drift.
 - **Exactness, the rest of the way:**
   - the single-layer harness (E0);
   - the kernel-boundary parity matrix;
@@ -624,13 +624,14 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 | 27/10 | prediction: under E53's VRAM hog the plain server would page and halve its decode | it kept 96-97% of it; the governor's restart cost more than the pressure, so the default became `watch` |
 | 27/10 | prediction: a larger ubatch costs nothing in decode, "free" at about 65% (E56) | a trade: +6% warm, -6% after a 16K prompt; the reasons held (the machine was slower, hit rate unchanged), the conclusion did not |
 | 27/10 | prediction: a larger ubatch leaves decode unaffected (E54) | decode 16-18% under E51's figures on the registered comparison, a fail; the comparison crosses sessions, so the cause is open until a same-session run at 512 |
-
 | 27/10-28/10 | row 17 compared "the same T8 configuration" across sessions, but not the same binary: the fast morning runs used builds that were replaced at 12:29 | E60 ran the morning's own binary beside today's: 0.96x, so not the code; the comparison rule now names binaries |
 | 28/10 | the same PowerShell `$r`/`$R` collision as on 24/10, in E60's loop; two launches ran only their pre-run checks | renamed; every chain's variables listed and checked for case collisions before launch |
 | 28/10 | two more guessed stamps (E59 "07:53", E55 "08:05"), each corrected from the clock within a minute | every stamp is now copied from a clock read in the same command that writes it |
 | 28/10 | a recursive search of mine ran during E58's first exactness arms; E58's pre-run drive baseline came from another model's file | both disclosed in E58 (exactness unaffected); the second exposed a real drive finding (one file reads 2.0 GB/s, another 3.1, every time) |
 | 28/10 | prediction: the logical batch `-b` is not part of the reference, about 80% (E59) | wrong: 0/10 records at `-b 512` against 2048; profiles now record `-b` and launch refuses a mismatch |
 | 28/10 | prediction: E60 gives MACHINE (65%); its threshold 0.85 x 15.15 = 12.9 | the run gave 12.98: NO DECISION by 0.08, with CODE ruled out; a threshold set from the outlier, not from the slow state |
+| 28/10 | E50's first calibration ran with the 8 GB ballast evicted by Windows (a server used 12 GB) | voided before any round; an active ballast built and checked by a planted test (I1-I3, I3 added after I2 and disclosed); an audit cleared the earlier 8 GB results |
+| 28/10 | E50's exact plan dropped to its floor row on a 263 MiB drift and a 300 MiB margin | M ran as the rule said (no hand tuning); the excluded row was run beside it, reported only (31.4 against M's 6.7); debt row 20 |
 
 ---
 
@@ -1505,3 +1506,28 @@ between decode bursts at 800-1,200 MHz of 3,105, about 30% busy, far under its p
 state is the suspect, and testing it needs a driver setting changed on the reference laptop. The registered verdict
 is still NO DECISION (a threshold missed by 0.08 tok/s). Since 28/10, `tools/prerun/prerun_check.py` and a GPU clock
 log run beside every registered speed run, and comparisons are made inside one session.
+
+#### A36. E50: the 8 GB milestone, under RAM pressure
+
+Conditions: Gemma 4 26B-A4B-it UD-IQ4_XS on the rebased build; the GPU capped at 8 GB by an active ballast (it touches
+every block every 100 ms, because Windows evicted the old idle one); about 25 GiB of RAM held; context 8,192; ten
+decode prompts at 128 tokens and one 4,096-token prompt; five interleaved rounds. S is the best of a fresh stock
+sweep (`-ncmoe` 16-30, with and without the memory map); M is whatever `marian calibrate` and `marian plan
+--exact-only` chose, with no hand tuning. R was added before any round, reported only: the exact row the plan's
+margin excluded.
+
+| Arm | Configuration | Decode (median of 5) | 4K prefill | Identical to all-VRAM |
+|---|---|---|---|---|
+| S | stock `-ncmoe 22 -lm none` | 12.00 (6.7-16.7) | 977.9 | no, in 5 of 5 (max 0.99) |
+| M | `-ncmoe 30 --moe-cache-mib 866` | 6.70 | 23.3 | yes, 5 of 5 |
+| R (reported only) | `-ncmoe 30 --moe-cache-mib 4103 --moe-miss-source ring` | 31.36 (30.6-31.6) | 206.1 | yes, 5 of 5 |
+
+Verdict: **FAIL**, on decode, prefill and rounds (M >= S in 0 of 5). Unrestricted, the planner picks stock `-ncmoe 24
+-lm none` on this profile, which is the right answer here. Stock's setting at the cliff's edge wavered between about
+6.7 and 16.7 from run to run.
+
+Taught us: for a gate on an 8 GB card (a long prompt, a short answer), stock offload is the right tool, and Marian
+says so. The plan dropped from the fast exact row to its floor row on a 263 MiB drift in free VRAM plus a 300 MiB
+margin, because the cliff finder had probed only two budgets: debt row 20. And the excluded row, exact, decoded at
+2.6x stock after short prompts: on an 8 GB card Marian's case is decode, not prefill. Making that claim needs its own
+registered rule.

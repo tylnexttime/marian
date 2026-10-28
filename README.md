@@ -69,7 +69,10 @@ These are why a measuring tool matters. Sources and conditions for every figure 
   Gemma 4 26B-A4B at IQ3_XXS with `-ncmoe 18` ran at 26.3 tok/s, and small dense models that fit in VRAM ran at
   65-90 tok/s. Even with M1.1's ring, the cache reached 13.4 tok/s there against 15.0 for plain offload (measured on
   the M1.0 build): **under
-  heavy desktop RAM pressure, plain offload still wins.** A measuring tool that tells you the plain option wins is
+  heavy desktop RAM pressure, plain offload still wins.** The registered milestone for that case (E50, 28/10/2026,
+  with the prefill patches) confirmed it: Marian's exact plan decoded 6.7 tok/s against stock's 12.0 and prefilled
+  23 against 978 at 4K, and the planner, unrestricted, picks stock there. One exact row that the plan's safety
+  margin excluded decoded 31.4 tok/s, 2.6x stock, but still prefilled 5x slower. A measuring tool that tells you the plain option wins is
   doing its job.
 
 ## How it fits together
@@ -178,7 +181,9 @@ Be warned; this is research code.
   Linux code paths exist (`O_DIRECT`) but have not been run.
 - **One machine.** Every M1 number comes from one reference laptop (RTX 4090 Laptop 16 GB, 32 GB RAM). The "8 GB GPU"
   results are a **simulation**: a VRAM ballast on the 16 GB card keeps its kernels, PCIe link and SSD (design item
-  C-17), and the desktop's own display memory made it harsher than a real 8 GB card.
+  C-17), and the desktop's own display memory made it harsher than a real 8 GB card. On 28/10 we found Windows
+  can evict an idle ballast; since then the ballast touches its memory every 100 ms and logs the card's use, and an
+  audit found the earlier 8 GB results were not inflated.
 - **Few rounds.** Most arms ran twice (some once); only the tier-against-stock comparison has the five interleaved
   rounds the design asks for. Treat other differences under about 10% as noise.
 - **By default the tier still costs prefill 4-5x against stock (about 3x against upstream's cache).** With
@@ -494,7 +499,7 @@ The living roadmap, with the evidence behind each item and the dev debt, is
 short: rebase onto current upstream (done); make prefill the main target (expert page faults were the cost, not
 Swift's embedding table; prefill misses can now come from P3, opt-in, and a declared ubatch of 2048 reached stock's
 prefill exactly; next, fewer bytes per prompt); calibration v1 with Windows pinning and RAM-safety rules; then the
-8 GB laptop under RAM pressure. The milestones from
+8 GB laptop under RAM pressure (measured 28/10: stock wins it, and the planner picks stock). The milestones from
 [DESIGN-M1 section 10](docs/design/DESIGN-M1.md), reshaped by what M1.0 measured:
 
 - **M1.2:** a ranked policy (ranked core, warm start, doorkeeper, transient slots, budgets by need), with a bitwise

@@ -31,9 +31,9 @@ gate). Evidence marked *theirs* comes from another project's own machine and has
     already prefetches those rows.
   - **What does hurt:** with the 6 GiB tier, prefill runs about 38,700 single-page disk reads per second, which is
     expert pages faulting in under memory pressure. That makes the P3 prefill source below the first fix.
-- **The use case that drives the work:** a PII/sensitivity gate on 4-30B models, on an 8 GB GPU beside a desktop that
-  uses most of 32 GB. Prefill matters as much as decode there, and today stock offload wins that case (not yet
-  re-measured with the prefill patches; that is E50).
+- **The use case that drives the work:** a sensitivity gate on 4-30B models, on an 8 GB GPU beside a desktop that
+  uses most of 32 GB. Prefill matters as much as decode there, and stock offload wins that case: E50 (28/10) measured it with the
+  prefill patches and an exact plan, and Marian's planner picks stock there.
 
 ## Next, in order
 
@@ -167,6 +167,16 @@ on decode in 4 of the 5 rounds.
   and a short answer, a declared `-ub 2048` row with P3 prefill is the likely contender: on the 16 GB laptop it beat
   default stock on prefill and decode, exactly.
 
+**Result (28/10/2026, register E50): FAIL, and the planner picks stock.** With the 8 GB cap held by an active
+ballast (the old one was evicted by Windows; see debt row 21), stock's best in a fresh sweep was `-ncmoe 22 -lm none`.
+Calibration's exact plan chose a 866 MiB cache. Over five rounds it decoded 6.70 tok/s against stock's 12.00 (0 of 5
+rounds) and prefilled 23 against 978 at 4K; it was identical to all-VRAM in every round and stock differed in every
+round. Unrestricted, `marian plan` picks stock `-ncmoe 24 -lm none` on that profile: the right answer. Reported only:
+the exact ring row at 4,103 MiB, which the plan's 300 MiB margin excluded, decoded **31.4 tok/s (2.6x stock)**,
+exactly, and fitted under the cap in every run, but prefilled at 206. So the planner left a fast exact decode row on
+the table (debt row 20), and on an 8 GB card Marian's case is decode after short prompts, not a gate's long prompt.
+That would be a new milestone with its own rule, not a rereading of this one.
+
 ### 5. M1.2, reshaped: evaluation and exactness rather than a new VRAM policy
 
 On the real trace every candidate policy lost to upstream's SLRU (JOURNEY A19), so M1.2's work is now:
@@ -204,7 +214,7 @@ On the real trace every candidate policy lost to upstream's SLRU (JOURNEY A19), 
 - **Answer-changing:**
   - **A predictor that replaces the router.** Edge0 does this, and its 35B tier is 3.9 benchmark points below its base.
   - **Fewer experts per token.** Strata's "Faster" mode routes 5 of 6.
-  - **Skipping layers on long prompts.** In Strata's version the top token changed at 0.5% of positions; a PII gate
+  - **Skipping layers on long prompts.** In Strata's version the top token changed at 0.5% of positions; a sensitivity gate
     rides on single tokens.
   - **Expert deferral** (KTransformers).
 - **Network surfaces:** launchers, update feeds, downloaders, self-updating engines.
@@ -240,4 +250,5 @@ gate should use a model whose licence fits the deploying organisation.
 | 17 | The whole machine ran about 22% slower on the afternoon of 27/10 than that morning (the same T8 configuration: 11.87 against 15.15 tok/s decode; stock fell too) | **ended 28/10 by its second condition; cause narrowed, not named.** Forensics: the GPU side and host side slowed together (same bytes, CPU perf, GPU share, free RAM); the 2x slump ran with the CPU below base clock; power source, Defender scans and memory ruled out. E60: 27/10 morning's own binary runs 0.96x today's build, so not the code. GPU logs show the GPU idling at 800-1,200 MHz between decode bursts: the platform's power state is the suspect; testing it needs a driver power-management change on the reference laptop. `tools/prerun/prerun_check.py` and a GPU clock log run beside every registered speed run since E58 | ended 28/10 (pre-run check in every registered speed run) |
 | 18 | Calibration's prefill probe fills 75% of the measured context, so a 4K calibration judges the P3 prefill source on about 3K tokens, while its gain was measured at 16K | **done 28/10**: `calibrate --probe-prompt N` probes at the deployment's prompt length (refused if it does not fit the context); the profile records the probe; default unchanged; offline tests | ended 28/10 |
 | 19 | Is the logical batch `-b` part of the reference? The default is `-ub 512 -b 2048`, a declared N is `-ub N -b N`; unmeasured | **answered 28/10 (E59): yes.** At a fixed ubatch, `-b 512` against `-b 2048` matched 0/10 records (0.603); the cache path at `-b 512` still equals all-VRAM at `-b 512`. Profiles now record `-b`; launch refuses a different `-b` and `LLAMA_ARG_BATCH`/`LLAMA_ARG_UBATCH` | ended 28/10 (E59) |
-| 19 | The default ubatch means llama-server's own `-ub 512 -b 2048`; a declared ubatch N passes `-ub N -b N` | only the ubatch should set the compute shape; not measured | one exactness run shows `-b` does not change answers at a fixed ubatch |
+| 20 | The planner's choice is fragile at the VRAM cliff (E50) | the cliff finder probed two cache budgets (866 and 4,103 MiB); a 263 MiB drift in free VRAM between calibration and plan, plus the 300 MiB margin, dropped the exact plan to the floor row (6.7 tok/s), while the excluded row ran at 31.4 under the same cap in every round | calibration probes budgets between its floor and its first fitting row, and a planted check shows a 300 MiB drift moves the choice by at most one row |
+| 21 | The 8 GB simulation's VRAM ballast could be evicted | **done 28/10:** M1.0's ballast touched its memory once and slept, and Windows evicted it when a server grew (E50's first calibration ran on 12 GB). `ballast_active` touches every block every 100 ms and logs the card's used memory; checked by a planted test (E50's I1-I3). An audit of the M1.0/M1.1 8 GB logs found those results not inflated | ended 28/10: every 8 GB run since uses the active ballast and keeps its residency log |
