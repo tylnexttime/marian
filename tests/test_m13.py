@@ -218,7 +218,8 @@ class FakeMarian:
     """A Marian build on a synthetic 8,151 MiB GPU: refuses budgets below 700 MiB, pages above a 5,000 MiB cache."""
     name = "llama.cpp"
 
-    def __init__(self, help_text=HELP_MARIAN):
+    def __init__(self, help_text=HELP_MARIAN, cliff_mib=5000, cache_overhead=1500):
+        self.cliff_mib, self.cache_overhead = cliff_mib, cache_overhead
         self.running: Config | None = None
         self.started: list[Config] = []
         self.help = help_text
@@ -234,7 +235,7 @@ class FakeMarian:
         if c is None:
             return 0
         if c.moe_cache_mib:
-            return 1500 + c.moe_cache_mib
+            return self.cache_overhead + c.moe_cache_mib
         return 1500 + (2 - c.n_cpu_moe) * 600
 
     def start(self, model, c, log):
@@ -261,7 +262,7 @@ class FakeMarian:
         c = self.running
         tg = 20.0 + (2 - c.n_cpu_moe) * 5
         if c.moe_cache_mib:
-            tg = 25.0 + c.moe_cache_mib / 1000 if c.moe_cache_mib <= 5000 else 3.0
+            tg = 25.0 + c.moe_cache_mib / 1000 if c.moe_cache_mib <= self.cliff_mib else 3.0
             tg += {"ring": 2.0, "tier": 4.0 + (c.tier_mib or 0) / 10000}.get(c.miss_source, 0.0)
         return {"prompt_n": 3000, "prompt_per_second": 800.0, "predicted_per_second": tg}
 
@@ -328,7 +329,7 @@ class CacheArms(unittest.TestCase):
 
     def test_ram_envelope_limits_the_ladder(self):
         doc = self.run_profile(FakeMarian(), ram_available=7300)            # 7,300 - 6,144 - 64: only 1,024 fits
-        tiers = [r["tier_mib"] for r in doc["rows"] if r.get("miss_source") == "tier"]
+        tiers = [r["tier_mib"] for r in doc["rows"] if r.get("miss_source") == "tier" and r["arm"] == "source"]
         self.assertEqual(tiers, [1024])
 
     def test_stock_build_gets_the_walk_only(self):
@@ -348,6 +349,71 @@ class CacheArms(unittest.TestCase):
         self.assertEqual((cell["best_mib"], cell["probes"]), (2000, 2))
         self.assertIn("every expert fits", cell["skipped_sources"])
         self.assertFalse(any(c.miss_source for c in eng.started))
+
+
+class DriftRungs(unittest.TestCase):
+    """Debt row 20 (register E63): the best cache budget fits with nothing to spare beyond the plan margin, so a small
+    VRAM drift before launch must cost one rung, not the whole ladder. The fake's paging cliff sits above the VRAM
+    room here, and a cache arm needs 60 MiB less beside its budget than the walk's experts-on-CPU point, so the best
+    budget is the room itself (5,351 MiB) and fits the plan with 60 MiB to spare: E50's case (4,103 MiB, 63 to spare)."""
+    ROOM = 8151 - 1000 - 300 - 1500
+
+    def run_profile(self, eng, ram=None, **opt):
+        with tempfile.TemporaryDirectory() as d, fake_machine(eng),                 mock.patch.object(machine, "ram_mib", lambda: (32000, ram() if ram else 16000)),                 mock.patch.object(profile, "model_geometry", lambda m: object()),                 mock.patch.object(profile.geometry, "floor_mib", lambda g, n=512: 700),                 mock.patch.object(profile.geometry, "full_mib", lambda g, n=512: 12000):
+            out = profile.run(toy_moe(Path(d)), eng, [4096], ["f16"], 2, None, Path(d) / "profiles", 16,
+                              cache=CacheOptions(**opt), sweep=ThreadOptions(enabled=False))
+            return json.loads(out.read_text(encoding="utf-8"))
+
+    def test_a_planted_300_mib_drift_costs_one_rung(self):
+        doc = self.run_profile(FakeMarian(cliff_mib=6000, cache_overhead=1440))
+        cell = doc["cache_search"]["cells"][0]
+        self.assertEqual(cell["best_mib"], self.ROOM)
+        rungs = cell["rungs"]["measured"]
+        self.assertEqual([r["mib"] for r in rungs], [4864, 4352])     # 5,351 - 512 and - 1,024, rounded up to 64 MiB
+        self.assertTrue(all(r["cache"] == "ok" and [s["status"] for s in r["sources"]] == ["ok"] * 4 for r in rungs))
+        rung_rows = [r for r in doc["rows"] if r["arm"] == "rung"]
+        self.assertEqual(len(rung_rows), 2 * 5)
+        self.assertTrue(all(r["exact_class"] and r["moe_cache_mib"] < self.ROOM for r in rung_rows))
+        rows = plan.rows_of([(Path("p.json"), doc)])
+        check = plan.drift_check(rows, 3000, 8151, 300)
+        self.assertTrue(check["ok"], check)
+        self.assertEqual((check["undrifted"]["moe_cache_mib"], check["drifted"]["moe_cache_mib"]), (self.ROOM, 4864))
+        self.assertEqual(check["undrifted"]["miss_source"], check["drifted"]["miss_source"])
+
+    def test_without_rungs_the_drift_falls_to_the_floor(self):
+        """The red case: today's finder (two probes, then sources at the best budget only)."""
+        doc = self.run_profile(FakeMarian(cliff_mib=6000, cache_overhead=1440), drift_rungs=0)
+        self.assertFalse(any(r["arm"] == "rung" for r in doc["rows"]))
+        check = plan.drift_check(plan.rows_of([(Path("p.json"), doc)]), 3000, 8151, 300)
+        self.assertFalse(check["ok"], check)
+        # nothing between the floor (700) and the room was measured: the drifted plan leaves the cache ladder (here
+        # for the fake's full offload, which fits; in E50 for the floor row) at a fraction of the speed
+        self.assertIsNone(check["drifted"]["moe_cache_mib"], check)
+        self.assertLess(check["drifted"]["tg_tps"], 0.9 * check["undrifted"]["tg_tps"])
+
+    def test_rungs_replicate_surviving_sources_inside_the_ram_envelope(self):
+        eng = FakeMarian(cliff_mib=6000, cache_overhead=1440)
+        # 7,300 MiB available: the ladder keeps tier 1,024 only. Once a rung starts (a budget below the room), only
+        # 6,300 is left: the ring (64 MiB) still fits beside the 6,144 floor, the tier no longer does.
+        ram = lambda: 6300 if eng.started and 700 < (eng.started[-1].moe_cache_mib or 0) < self.ROOM else 7300
+        doc = self.run_profile(eng, ram=ram)
+        cell = doc["cache_search"]["cells"][0]
+        self.assertEqual(cell["ram_envelope"]["tier_mib"], [1024])
+        for r in cell["rungs"]["measured"]:
+            self.assertEqual([(s["miss_source"], s["status"]) for s in r["sources"]],
+                             [("ring", "ok"), ("tier", "skipped: the RAM envelope")])
+        started = [c for c in eng.started if c.moe_cache_mib and c.moe_cache_mib < self.ROOM and c.miss_source]
+        self.assertEqual({c.miss_source for c in started}, {"ring"})
+
+    def test_no_rung_at_or_below_the_floor(self):
+        cells = [self.run_profile(FakeMarian(cliff_mib=6000, cache_overhead=1440), max_cache_mib=m)["cache_search"]["cells"][0]
+                 for m in (1200, 1100)]
+        # 1,200 - 512 = 688, rounded up to 704: above the 700 floor, so measured; 1,100 - 512 rounds up to 640: none
+        self.assertEqual([(c["best_mib"], [r["mib"] for r in c["rungs"]["measured"]]) for c in cells],
+                         [(1200, [704]), (1100, [])])
+
+    def test_drift_check_without_baselines_is_undecided(self):
+        self.assertIsNone(plan.drift_check([], 3000, 8151)["ok"])
 
 
 class FakeLlama(LlamaCpp):

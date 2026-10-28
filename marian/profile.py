@@ -28,6 +28,11 @@ model is MoE, each (context, KV) cell also gets, after the walk:
    pinned, so the desktop cannot page it: with about 25 GB of 32 GB in desktop use, plain `-ncmoe` beat the cache
    (15.0 against 13.4 tok/s, 24/10/2026), and the tier costs prefill 4-5x against stock. So it is measured here, per
    machine, never assumed. When every expert fits in the cache there are no misses, and the sources are skipped.
+3. **Drift rungs** (debt row 20, after register E63): the best budget fits with nothing to spare beyond the plan's
+   margin, so in E50 a 263 MiB drop in free VRAM before launch left the planner only the floor row (6.7 against 31.4
+   tok/s). Below the best budget, every `drift_step_mib` (512) for `drift_rungs` (2) steps, never at or below the
+   floor, the cache row and every miss-source configuration that survived at the best budget are measured again
+   (`arm` rung), under the same RAM envelope. A drift smaller than one step then costs one rung, not the ladder.
 
 Cache arms load memory-mapped (`-lm mmap`): the ring and tier read a miss by its offset in the model's mapped files
 (without a mapping the fork logs "--moe-miss-source is not used"), and every measured cache arm ran mapped. The walk
@@ -106,6 +111,8 @@ class CacheOptions:
     n_ubatch: int = 512                  # the server's default; the exactness floor depends on it (run() sets it to
                                          # the declared ubatch)
     prefill_p3: bool = True              # measure each ring and tier row with --moe-prefill-source p3 too (0009 builds)
+    drift_step_mib: int = 512            # drift rungs (debt row 20, register E63): budgets this far apart below the best
+    drift_rungs: int = 2                 # how many rungs below the best budget; 0 measures the best budget only
 
 
 @dataclass
@@ -489,8 +496,42 @@ def cache_arms(model: Path, engine, s: dict, geom, ctx: int, kv: str, threads: i
     if best is None:
         summary["skipped_sources"] = "no cache budget ran without overflow"
         return rows, summary
+
+    def rungs() -> None:
+        """Drift rungs (debt row 20, register E63): the best budget fits with nothing to spare beyond the margin, so
+        a small drop in free VRAM before launch would leave the planner only the floor row. Below the best budget,
+        every drift_step_mib down to the floor, measure the cache row and each miss-source configuration that
+        survived at the best budget, under the same RAM envelope; a drift of less than one step then costs one rung."""
+        floor = min(r["moe_cache_mib"] for r in rows if r["arm"] == "cache" and r["status"] == "ok")
+        kept = [{k: r[k] for k in ("miss_source", "tier_mib", "ring_mib", "prefill_source") if r.get(k) is not None}
+                for r in rows if r["arm"] == "source" and r["status"] == "ok" and r["moe_cache_mib"] == best]
+        done: list[dict] = []
+        summary["rungs"] = {"step_mib": opt.drift_step_mib, "sources": kept, "measured": done}
+        for k in range(1, max(opt.drift_rungs, 0) + 1):
+            b = -(-(best - k * opt.drift_step_mib) // 64) * 64       # 64 MiB aligned, rounded up: within one step
+            if b <= floor:
+                break
+            r = run_one(b, "rung")
+            rung = {"mib": b, "cache": r["status"], "sources": []}
+            done.append(rung)
+            if r["status"] != "ok":
+                break
+            for src in kept:
+                pins = Config(ctx=ctx, cache_type=kv, moe_cache_mib=b, **src).pinned_mib()
+                if pins and pins > machine.ram_mib()[1] - opt.ram_floor_mib:
+                    rung["sources"].append(dict(src, status="skipped: the RAM envelope"))
+                    continue
+                s_row = run_one(b, "rung", **src)
+                if s_row["status"] == "ok" and src.get("miss_source") == "tier" \
+                        and s_row["ram_avail_low_mib"] < opt.ram_floor_mib:
+                    s_row["status"] = "ram_envelope"
+                    s_row["note"] = (f"RAM available fell to {s_row['ram_avail_low_mib']} MiB, below the "
+                                     f"{opt.ram_floor_mib} MiB floor")
+                rung["sources"].append(dict(src, status=s_row["status"]))
+
     if full is not None and best >= full:
         summary["skipped_sources"] = "every expert fits in the VRAM cache: no misses to serve"
+        rungs()
         return rows, summary
     pairs: list[dict] = []
     if opt.prefill_p3 and p3:
@@ -536,6 +577,7 @@ def cache_arms(model: Path, engine, s: dict, geom, ctx: int, kv: str, threads: i
         if tw is not None and tw["status"] in ("ram_envelope", "overflow"):
             summary["ram_envelope"]["stopped"] = f"tier {t} MiB with P3 prefill: {tw['status']}"
             break
+    rungs()
     return rows, summary
 
 

@@ -238,6 +238,40 @@ def fits_after_stop(row: dict, current: dict, *, vram_free_mib: int | None, ram_
     return True
 
 
+def drift_check(rows: list[dict], need: int, total_vram_mib: int, drift_mib: int = 300, row_mib: int = 512, *,
+                objective: str = "tg", margin_mib: int = 300, exact_only: bool = True, ram_free_mib: int | None = None,
+                ram_floor_mib: int = 6144, ubatch: int = DEFAULT_UBATCH) -> dict:
+    """The planted drift check of debt row 20 (register E63): plan at the free VRAM calibration saw (F0 = the card's
+    total minus the lowest baseline any qualifying row recorded), then at F0 - drift. The drift moves the choice by at
+    most one row when both plans choose a cache row and the drifted budget is at most `row_mib` below the undrifted
+    one (a row being one calibration step). Nothing is launched: this reads the profile."""
+    pool = candidates(rows, need, exact_only=exact_only, ubatch=ubatch)
+    bases = [r["vram_baseline_mib"] for r in pool if r.get("vram_baseline_mib") is not None]
+    out: dict = {"need": need, "drift_mib": drift_mib, "row_mib": row_mib, "exact_only": exact_only}
+    if not bases:
+        out.update(ok=None, why="no qualifying row recorded a VRAM baseline")
+        return out
+    f0 = total_vram_mib - min(bases)
+    picks = {}
+    for name, free in (("undrifted", f0), ("drifted", f0 - drift_mib)):
+        r = choose(rows, need, objective, vram_free_mib=free, margin_mib=margin_mib, exact_only=exact_only,
+                   ram_free_mib=ram_free_mib, ram_floor_mib=ram_floor_mib, ubatch=ubatch)
+        picks[name] = r
+        out[name] = None if r is None else {
+            "vram_free_mib": free, "config": key(r), "moe_cache_mib": r.get("moe_cache_mib"),
+            "miss_source": r.get("miss_source"), "tg_tps": r.get("tg_tps"), "pp_tps": r.get("pp_tps"),
+            "share_mib": vram_share(r)[0]}
+    u, d = picks["undrifted"], picks["drifted"]
+    if u is None or d is None or not u.get("moe_cache_mib") or not d.get("moe_cache_mib"):
+        out.update(ok=False, why="a plan chose no cache row (or none at all)")
+        return out
+    out["drop_mib"] = u["moe_cache_mib"] - d["moe_cache_mib"]
+    out["ok"] = out["drop_mib"] <= row_mib
+    out["why"] = (f"the drifted plan's cache budget is {out['drop_mib']} MiB below the undrifted one "
+                  f"({'within' if out['ok'] else 'more than'} one {row_mib} MiB row)")
+    return out
+
+
 def to_config(row: dict) -> Config:
     """Every recorded field back into a launch configuration: placement, KV, threads, load mode, cache budget, miss
     source, tier, ring, prefill source and the ubatch it was measured at (M0 dropped the cache budget here). The

@@ -219,6 +219,8 @@ def _cache_args(p, tier_steps: int) -> None:
     p.add_argument("--max-cache-mib", type=int, help="never offer the expert cache more VRAM than this")
     p.add_argument("--ram-floor", type=int, default=6144, metavar="MIB", help="never pin more than (RAM available - this)")
     p.add_argument("--tier-steps", type=int, default=tier_steps, help="pinned RAM tier sizes to measure")
+    p.add_argument("--drift-rungs", type=int, default=2, metavar="N",
+                   help="cache budgets measured below the best, 512 MiB apart, so a small VRAM drift costs one rung")
     p.add_argument("--ubatch", type=int, default=DEFAULT_UBATCH, metavar="N",
                    help="the deployment's declared ubatch: every row is measured at -ub N -b N (512: no flag)")
     p.add_argument("--no-thread-sweep", action="store_true", help="no CPU thread ladder for rows that compute on the CPU")
@@ -241,7 +243,7 @@ def _report_trade(out: Path) -> None:
 
 def _cache_opts(a) -> CacheOptions:
     return CacheOptions(enabled=not a.no_cache, max_cache_mib=a.max_cache_mib, ram_floor_mib=a.ram_floor,
-                        tier_steps=a.tier_steps)
+                        tier_steps=a.tier_steps, drift_rungs=a.drift_rungs)
 
 
 def _plan_or_serve(a) -> int:
