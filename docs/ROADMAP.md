@@ -62,6 +62,16 @@ before the build.
   new build 1.02x the old warm, 0.98x after 16K, same session). The decode exit was missed by **both** builds that
   morning (11.6-11.9 warm), so by the registered branch the machine, not the rebase, missed it (dev debt 17). None of
   the 32 commits moved an answer on either model.
+- **The third rebase (29/10/2026, register E65):** 34 commits onto `2e0d86beb` (b11976), no conflict. One is new in
+  kind: `f5222f25c` fuses the gate, up and GLU of MoE experts (`MUL_MAT_ID`) in the CUDA MMQ kernel, only for Q4_K,
+  Q5_K, Q6_K, Q8_0 and IQ4_XS weights with separate gate and up tensors. Neither reference model can reach it, and
+  its fusion decision reads the expert count of the tensor it is given, which on Marian's cache is a bank of
+  `n_slots`, not the model's 128: all-VRAM and a cache arm could take different kernels. So E65 added Groot
+  19B-A3B Q4_K_M (separate Q4_K gate and up, fits all-VRAM): two cache budgets, tier, ring and ring with P3 prefill,
+  all identical to all-VRAM; Gemma identical as in E58; regression 0.99 / 1.01. With every CUDA fusion off, the cache
+  is still identical to all-VRAM; the old build (no MoE fusion) gives Groot the same answers as the new, so the fused
+  kernel either did not fire or is bit-identical: not measured. `test-llama-context` fails at this commit on pure
+  upstream too (row 22).
 
 ### 2. Prefill track (the main target)
 
@@ -242,7 +252,7 @@ gate should use a model whose licence fits the deploying organisation.
 
 | # | Debt | State | Ends when |
 |---|---|---|---|
-| 1 | 107 commits behind upstream | **done 27/10**: rebased onto `63b4b303`, E48 passed (exact, decode exit met); **again 28/10** onto `338fce651`, E58 passed on exactness and regression (decode exit missed by both builds: the machine) | ended 27/10; the rebase rule keeps it ended |
+| 1 | 107 commits behind upstream | **done 27/10**: rebased onto `63b4b303`, E48 passed (exact, decode exit met); **again 28/10** onto `338fce651`, E58 passed on exactness and regression (decode exit missed by both builds: the machine); **again 29/10** onto `2e0d86beb`, E65 passed on exactness (Gemma, Swift and, new, Groot, the model the fused MoE kernel can reach) and regression | ended 27/10; the rebase rule keeps it ended |
 | 2 | M0 drops the cache budget when it launches a plan | **done 27/10**: plans restore cache budget, miss source and tier | ended 27/10 |
 | 3 | Prefill 4-5x behind stock with the tier | **paid down 27/10, opt-in, and calibration now measures both prefill sources and a declared ubatch (offline):** P3 prefill +76% at 16K, exact (E51); with a declared ubatch of 2048, 156.7 tok/s against stock's 142.4 at its default ubatch, exact against all-VRAM at 2048 (E54). The defaults (`mmap`, ubatch 512) are unchanged, so a default tier row is still 4-5x behind; prefill track above | a default (not opt-in) configuration prefills within 10% of stock's best on the reference laptop, exactly |
 | 4 | Exactness proved at top-3 log-probability, not full logits; no E0 harness or parity matrix | M1.2 above | an E0 single-layer harness passes bit-compare at real shapes, and a full-logit comparison is logged for the exactness arms |
@@ -263,3 +273,4 @@ gate should use a model whose licence fits the deploying organisation.
 | 19 | Is the logical batch `-b` part of the reference? The default is `-ub 512 -b 2048`, a declared N is `-ub N -b N`; unmeasured | **answered 28/10 (E59): yes.** At a fixed ubatch, `-b 512` against `-b 2048` matched 0/10 records (0.603); the cache path at `-b 512` still equals all-VRAM at `-b 512`. Profiles now record `-b`; launch refuses a different `-b` and `LLAMA_ARG_BATCH`/`LLAMA_ARG_UBATCH` | ended 28/10 (E59) |
 | 20 | The planner's choice is fragile at the VRAM cliff (E50) | the cliff finder probed two cache budgets (866 and 4,103 MiB); a 263 MiB drift in free VRAM between calibration and plan, plus the 300 MiB margin, dropped the exact plan to the floor row (6.7 tok/s), while the excluded row ran at 31.4 under the same cap in every round | **ended 28/10 (E63):** calibration now measures two drift rungs (512 and 1,024 MiB below the best budget) with the surviving sources. On E50's profile a planted 300 MiB drift dropped the plan 3,237 MiB (red case); after the fix, E50's calibration again moved 0 MiB at 300, one rung (512) at 600, and the real plan-time reading picked ring at 3,776 MiB (18.7 tok/s) where E50 fell to 7.4 |
 | 21 | The 8 GB simulation's VRAM ballast could be evicted | **done 28/10:** M1.0's ballast touched its memory once and slept, and Windows evicted it when a server grew (E50's first calibration ran on 12 GB). `ballast_active` touches every block every 100 ms and logs the card's used memory; checked by a planted test (E50's I1-I3). An audit of the M1.0/M1.1 8 GB logs found those results not inflated | ended 28/10: every 8 GB run since uses the active ballast and keeps its residency log |
+| 22 | Upstream `test-llama-context` fails at `2e0d86beb` | found 29/10 (E65): aborts in its parallel model sweep, after `deepseek32-moe`, with "unexpected graph reallocation (graph size = 919)"; the same on pure upstream with no Marian patch, 3 of 3 on build-m14, 2 of 2 on pure upstream; passes alone on `deepseek4-moe`. Suspect, not bisected: `838093f19` (DSV4 batch splitting) | a later rebase passes `ctest -L main` 16/16, or the failing commit is bisected and reported upstream |

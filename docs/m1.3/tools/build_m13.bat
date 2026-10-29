@@ -1,5 +1,5 @@
 @echo off
-rem Marian M1.3: llama.cpp at upstream 338fce651 (63b4b303 until 28/10/2026) + the Marian patches (docs\m1.0, m1.1, m1.2 and m1.3\patches, through
+rem Marian M1.3: llama.cpp at upstream 2e0d86beb (338fce651 until 29/10/2026, 63b4b303 until 28/10/2026) + the Marian patches (docs\m1.0, m1.1, m1.2 and m1.3\patches, through
 rem 0009) into build-m13. The first Marian build script WITH C++ exception unwinding (/EHsc): every earlier build
 rem passed CMAKE_CXX_FLAGS for the CUDA include path alone, which drops MSVC's default /EHsc. Register E57 (27/10/2026)
 rem built the same sources both ways and found every answer identical (tokens, log-probabilities and top-3, max

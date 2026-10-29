@@ -1592,3 +1592,28 @@ Taught us: a cliff finder that stops at the first budget that fits hands the pla
 budget fits with nothing to spare. A rung or two below it costs four probes. And one probe per budget cannot rank
 budgets a few percent apart. Stock's calibration rows also moved between E50 and E63 under the same ballast targets
 (best 20.5 then 24.5 tok/s), which is why M1.6's stock sweep runs its three fastest settings twice.
+
+### 29/10/2026
+
+#### A40. E65: the third rebase, and a model the new kernel can reach
+
+Conditions: upstream `2e0d86beb` (b11976, 34 commits after `338fce651`), the nine patches cherry-picked with no
+conflict and unchanged. Before registering, the upstream code was read: `f5222f25c` fuses MoE gate, up and GLU in the
+CUDA MMQ kernel, only for K-quants, Q8_0 and IQ4_XS with separate gate and up tensors. Gemma 4's file has merged
+gate-up experts and Swift's are IQ2_S, so E58's protocol would have passed by construction. Added: Groot 19B-A3B
+Q4_K_M (`qwen35moe`, 41 layers, 128 experts, Q4_K gate and up, 10.85 GiB, all-VRAM on the 16 GB card).
+
+| Check | Result |
+|---|---|
+| Unit tests | Python 170/170, trace-id test 1/1, `ctest -L main` 15/16: `test-llama-context` fails, and fails the same way on pure upstream |
+| Gemma: every cache arm against all-VRAM | 10/10 identical each, max difference 0; contrast 0/10, 0.590 |
+| Groot: cache at 2,500 and 5,000 MiB, tier, ring, ring + P3 prefill, against all-VRAM | 10/10 identical each, max difference 0; contrast 0/10, 0.386 |
+| Groot, every CUDA fusion off: cache against all-VRAM | identical (both differ from the default by 0.409) |
+| Groot all-VRAM, old build (no MoE fusion) against new | identical |
+| Swift T8, new/old, same session | 0.99 warm, 1.01 after a 16K prompt; records identical |
+
+Taught us: a rebase check must be able to fail for the commits it is checking. The models we always use could not
+reach the riskiest change, and the risk was specific to Marian: the fusion decision reads the expert count of the
+tensor it is handed, and our cache hands it a bank of slots. It held. The old build gives Groot the same answers, so
+whether the fused kernel ran at all is still open. And a failing unit test is named by building upstream without our
+patches, not by reading our diff.

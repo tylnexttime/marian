@@ -16,7 +16,7 @@ Marian has two layers.
 1. **M0, a measuring tool** (Python, standard library only). It measures how a model behaves on *this* machine:
    speed and memory for each context size, KV-cache type and GPU/CPU split. Then it picks the fastest configuration
    that fits a request and launches it. It never extrapolates: if nothing measured fits, it says so.
-2. **M1, a thin fork of llama.cpp** (pinned at upstream commit [`338fce651`](https://github.com/ggml-org/llama.cpp/commit/338fce651), release b11936). Mixture-of-experts (MoE) models only use a
+2. **M1, a thin fork of llama.cpp** (pinned at upstream commit [`2e0d86beb`](https://github.com/ggml-org/llama.cpp/commit/2e0d86beb), release b11976). Mixture-of-experts (MoE) models only use a
    few of their "experts" for each token. M1 keeps the most-used experts in GPU memory (VRAM) **one expert at a time,
    not one whole layer at a time**, and fetches the rest from system RAM or the SSD as fast as the machine allows. It
    builds on upstream llama.cpp's own expert cache (`--moe-cache-mib`). It is **exact by default**: speed-ups that can
@@ -256,6 +256,14 @@ Be warned; this is research code.
   new builds decode at the same speed in one session (new/old 1.02 warm, 0.98 after a 16K prompt). **The decode exit
   was not re-met that morning:** both builds ran at 11.6-11.9 tok/s warm and 11.1-11.3 after a 16K prompt, under the
   12.0 exit, because this laptop has run about 20% slower since the middle of 27/10/2026 (see the next item).
+  On 29/10/2026 it moved to `2e0d86beb` (b11976, 34 commits, no conflict, the nine patches unchanged) and was
+  re-checked (E65). One of those commits fuses the MoE gate, up and GLU into one CUDA kernel, which neither Gemma
+  (merged gate-up experts) nor Swift (IQ2_S experts) can reach, so the check added **Groot 19B-A3B Q4_K_M**
+  (`qwen35moe`, separate Q4_K gate and up experts, small enough to run all-VRAM as the reference): every cache arm
+  of all three models is identical to all-VRAM, and the new build decodes at the old one's speed (0.99 warm, 1.01
+  after a 16K prompt). Groot is the third model family Marian has run. **One upstream unit test fails at this commit,
+  and not because of Marian:** `test-llama-context` aborts on an unexpected graph reallocation in its model sweep, and
+  fails the same way on upstream `2e0d86beb` built with no Marian patch (dev-debt row 22).
 - **The reference laptop's speed moved by about 20%, and the cause is narrowed, not named** (dev-debt row 17). The
   Swift tier decoded 15.1-15.2 tok/s on the morning of 27/10/2026 and 11.6-13.0 from that afternoon on, through a
   reboot. Register E60 ran that morning's own binary with that morning's own arguments beside today's build: 0.96x,
