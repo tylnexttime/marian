@@ -198,6 +198,15 @@ are section 4's, and stock wins them. Stock's best comes from a fresh sweep whos
 (one run at the cliff's edge can win by luck). E50's excluded ring row (31.4 against 12.0) is why this milestone
 exists, and it counts for nothing in it. It runs on a later day; row 20 (E63) had to pass first, and did.
 
+**Result (29/10/2026, register E64, on the E65 build): FAIL, exact.** Calibration's exact plan chose
+`-ncmoe 30 --moe-cache-mib 3136` with memory-map misses (profile decode 39.4 tok/s); stock's best, from a fresh sweep
+with its top three run twice, was `-ncmoe 20 -lm none`. Over five interleaved rounds Marian decoded a median 11.6
+against stock's 12.1 (0.96x), faster in 2 of 5, identical to all-VRAM in every round while stock differed in every
+round. The cause is calibration, not the cache: one probe per row scattered by 2x at the VRAM cliff (the same source
+read 39.4 at 3,136 MiB and 18.1 at 3,648 MiB; stock `-ncmoe 24 -lm none` read 22.6 in calibration and 13.2 in the
+sweep an hour later), so the planner ranked rows on lucky readings. Debt row 23. M1.6 is re-run unchanged once
+calibration measures each row several times through the same request loop serve uses.
+
 ### 5. M1.2, reshaped: evaluation and exactness rather than a new VRAM policy
 
 On the real trace every candidate policy lost to upstream's SLRU (JOURNEY A19), so M1.2's work is now:
@@ -274,3 +283,4 @@ gate should use a model whose licence fits the deploying organisation.
 | 20 | The planner's choice is fragile at the VRAM cliff (E50) | the cliff finder probed two cache budgets (866 and 4,103 MiB); a 263 MiB drift in free VRAM between calibration and plan, plus the 300 MiB margin, dropped the exact plan to the floor row (6.7 tok/s), while the excluded row ran at 31.4 under the same cap in every round | **ended 28/10 (E63):** calibration now measures two drift rungs (512 and 1,024 MiB below the best budget) with the surviving sources. On E50's profile a planted 300 MiB drift dropped the plan 3,237 MiB (red case); after the fix, E50's calibration again moved 0 MiB at 300, one rung (512) at 600, and the real plan-time reading picked ring at 3,776 MiB (18.7 tok/s) where E50 fell to 7.4 |
 | 21 | The 8 GB simulation's VRAM ballast could be evicted | **done 28/10:** M1.0's ballast touched its memory once and slept, and Windows evicted it when a server grew (E50's first calibration ran on 12 GB). `ballast_active` touches every block every 100 ms and logs the card's used memory; checked by a planted test (E50's I1-I3). An audit of the M1.0/M1.1 8 GB logs found those results not inflated | ended 28/10: every 8 GB run since uses the active ballast and keeps its residency log |
 | 22 | Upstream `test-llama-context` fails at `2e0d86beb` | found 29/10 (E65): aborts in its parallel model sweep, after `deepseek32-moe`, with "unexpected graph reallocation (graph size = 919)"; the same on pure upstream with no Marian patch, 3 of 3 on build-m14, 2 of 2 on pure upstream; passes alone on `deepseek4-moe`. Suspect, not bisected: `838093f19` (DSV4 batch splitting) | a later rebase passes `ctest -L main` 16/16, or the failing commit is bisected and reported upstream |
+| 23 | One calibration probe per row cannot rank rows at the VRAM cliff | found 29/10 (E64): rows that should agree scatter by 2x (39.4 against 18.1 for two budgets of one source; stock 22.6 in calibration against 13.2 in a sweep), and the plan follows the luck. Related to row 12 | calibration probes each row at least three times through the request loop serve uses, keeps the median and spread, the planner refuses to rank rows whose spreads overlap, and a registered test shows the calibration-to-serve ratio within 15% on the 8 GB setting |

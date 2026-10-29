@@ -1617,3 +1617,22 @@ reach the riskiest change, and the risk was specific to Marian: the fusion decis
 tensor it is handed, and our cache hands it a bank of slots. It held. The old build gives Groot the same answers, so
 whether the fused kernel ran at all is still open. And a failing unit test is named by building upstream without our
 patches, not by reading our diff.
+
+#### A41. E64: M1.6 on the 8 GB laptop, and the probe that ranked on luck
+
+Conditions: Gemma 4 26B-A4B IQ4_XS, context 8,192, the 8 GB cap held by the active ballast and 25 GB of RAM in use,
+the E65 build. Marian chose its own row (`calibrate --probe-prompt 32 --n-predict 128`, then `plan --exact-only
+--fit-now`); stock's best came from a fresh sweep of 16 settings, the top three run twice. Five interleaved rounds of
+the ten short decode prompts.
+
+| | Stock (`-ncmoe 20 -lm none`) | Marian (`-ncmoe 30`, cache 3,136 MiB, mmap misses) |
+|---|---|---|
+| Decode per round (tok/s) | 15.0, 9.0, 12.1, 15.2, 7.2 | 11.6, 12.8, 9.9, 12.8, 10.4 |
+| Median | 12.1 | 11.6 (0.96x), faster in 2 of 5 |
+| Against all-VRAM | differs in every round | identical in every round |
+| Calibration's figure for the row | 16.6 | 39.4 |
+
+Taught us: the planner was right to trust its profile only if the profile is right, and one 128-token probe at the
+edge of VRAM is not. Two budgets of the same source read 39.4 and 18.1. Stock is just as noisy here (7.2 to 15.2
+across rounds), so a decode exit on this setting needs repeated probes before it needs a faster cache. Failing by
+the rule as written, rather than re-reading it, is what points at the real work.
