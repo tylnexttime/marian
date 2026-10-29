@@ -1636,3 +1636,19 @@ Taught us: the planner was right to trust its profile only if the profile is rig
 edge of VRAM is not. Two budgets of the same source read 39.4 and 18.1. Stock is just as noisy here (7.2 to 15.2
 across rounds), so a decode exit on this setting needs repeated probes before it needs a faster cache. Failing by
 the rule as written, rather than re-reading it, is what points at the real work.
+
+#### A42. E66 and E67: the vendor's power manager is not row 17
+
+Conditions: Swift T8 on the E65 build, six interleaved runs per test (on off | off on | on off). E66 stopped OMEN
+Command Center's four user processes, which had used more CPU since boot than anything else on the laptop; E67
+stopped its Windows service, through a small elevated helper that can only stop and start that one service.
+
+| Test | Median warm decode, on | Off | Ratio |
+|---|---|---|---|
+| E66, OMEN's user processes | 11.77 | 11.94 | 1.015 |
+| E67, OMEN's service | 12.68 | 12.51 | 0.987 |
+
+Taught us: the biggest CPU consumer since boot was not the bottleneck, and neither was the service behind it. The
+GPU logs beside both tests were the useful part: the GPU is busy for under a third of each token, at about half its
+clock. Whatever slowed this laptop on 27/10 lives on the host side of a token, and that is what to measure next,
+rather than another process to switch off.
