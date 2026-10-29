@@ -264,7 +264,7 @@ class DeclaredUbatch(unittest.TestCase):
         calls = []
 
         def fake_run(model, eng, ctxs, kvs, step, threads, out_dir, n_predict, cache=None, sweep=None, ubatch=512,
-                     probe_prompt=None):
+                     probe_prompt=None, repeats=1):
             calls.append(ubatch)
             fp, mid = machine.detect().fingerprint(), sha256_head(model)
             d = json.loads(json.dumps(DOC_2048))

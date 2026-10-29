@@ -3,7 +3,10 @@
     python -m marian machine
     python -m marian inspect MODEL.gguf
     python -m marian profile MODEL.gguf --engine PATH/llama-server --ctx 4096,8192,16384 --kv f16,q8_0 [--step 2]
-    python -m marian calibrate MODEL.gguf --engine PATH/llama-server [--ctx 4096] [--kv f16] [--ubatch 512]   (the quick profile)
+    python -m marian calibrate MODEL.gguf --engine PATH/llama-server [--ctx 4096] [--kv f16] [--ubatch 512] [--repeats 1]
+                               (the quick profile)
+    python -m marian recalibrate MODEL.gguf --engine PATH/llama-server [--ubatch 512] [--repeats N]
+                                 (the same calibration again, unchanged; the old profile is kept beside the new)
     python -m marian plan MODEL.gguf --need 6000 [--objective pp] [--fit-now | --vram-free MIB] [--exact-only | --stock]
                           [--ubatch 512] [--json]
     python -m marian serve MODEL.gguf --engine PATH/llama-server --need 6000 [--port 9951] [--calibrate] [--exact-only |
@@ -33,6 +36,13 @@ time, a memory governor (`--governor watch` by default: it warns, and pauses onl
 `--ubatch N` declares the deployment's ubatch (default 512, no flag; `-ub N -b N` otherwise). It is part of the
 exactness reference (register E54), so it is declared, never chosen: `calibrate --ubatch N` measures every row at N
 into its own profile, and `plan` and `serve` use only rows measured at the ubatch they declare, refusing otherwise.
+
+`--repeats N` (1 to 3, default 1) probes each row N times on the same server and keeps every reading, the median
+(the row's figure) and the spread. `recalibrate` re-runs a profile's own calibration (its contexts, KV types, probe,
+repeats and cache options, read from the profile) as a new session: the old profile is kept beside it, named by when
+it was measured, and the configurations whose decode moved more than 15% between the two are listed. Chris
+(30/10/2026): one probe is the default, repetition an option, and re-calibration the remedy for a stale or lucky
+profile.
 """
 from __future__ import annotations
 
@@ -80,6 +90,13 @@ def main(argv=None) -> int:
     p.add_argument("--step", type=int, default=2); p.add_argument("--threads", type=int)
     p.add_argument("--n-predict", type=int, default=32); p.add_argument("--port", type=int, default=9951)
     _cache_args(p, tier_steps=2)
+    p = sub.add_parser("recalibrate", help="run this machine's calibration of the model again, unchanged, as a new session")
+    p.add_argument("model", type=Path); p.add_argument("--engine", required=True)
+    p.add_argument("--ubatch", type=int, default=DEFAULT_UBATCH, metavar="N", help="which profile: the one at this ubatch")
+    p.add_argument("--repeats", type=int, choices=range(1, profile.REPEATS_MAX + 1), metavar="N",
+                   help="probes per row (1-3); default: what the profile was calibrated with")
+    p.add_argument("--port", type=int, default=9951)
+    p.add_argument("--json", action="store_true", help="print the old-against-new comparison as JSON")
     for name in ("plan", "serve"):
         p = sub.add_parser(name); p.add_argument("model", type=Path); p.add_argument("--need", type=int, required=True)
         p.add_argument("--objective", choices=["tg", "pp"], default="tg")
@@ -195,16 +212,18 @@ def main(argv=None) -> int:
         eng = LlamaCpp(a.engine, a.port)
         out = profile.run(a.model, eng, [int(x) for x in a.ctx.split(",")], a.kv.split(","), a.step, a.threads,
                           PROFILES, a.n_predict, cache=_cache_opts(a), sweep=ThreadOptions(enabled=not a.no_thread_sweep),
-                          ubatch=a.ubatch, probe_prompt=a.probe_prompt)
+                          ubatch=a.ubatch, probe_prompt=a.probe_prompt, repeats=a.repeats)
         print(f"profile written: {out}")
         _report_trade(out)
     elif a.cmd == "calibrate":
         eng = LlamaCpp(a.engine, a.port)
         out = profile.run(a.model, eng, [a.ctx], [a.kv], a.step, a.threads, PROFILES, a.n_predict, cache=_cache_opts(a),
                           sweep=ThreadOptions(enabled=not a.no_thread_sweep), ubatch=a.ubatch,
-                          probe_prompt=a.probe_prompt)
+                          probe_prompt=a.probe_prompt, repeats=a.repeats)
         print(f"calibration written: {out}")
         _report_trade(out)
+    elif a.cmd == "recalibrate":
+        return _recalibrate(a)
     elif a.cmd == "diag":
         eng = LlamaCpp(a.engine, a.port) if a.engine else None
         names = launch.write_diag(a.out, PROFILES, a.model, eng, a.need, a.port, ubatch=a.ubatch)
@@ -226,6 +245,50 @@ def _cache_args(p, tier_steps: int) -> None:
     p.add_argument("--no-thread-sweep", action="store_true", help="no CPU thread ladder for rows that compute on the CPU")
     p.add_argument("--probe-prompt", type=int, metavar="TOKENS",
                    help="probe prefill at the deployment's prompt length (default: 75%% of the context)")
+    p.add_argument("--repeats", type=int, default=1, choices=range(1, profile.REPEATS_MAX + 1), metavar="N",
+                   help="probe each row N times (1-3) on the same server; the row keeps the median and the spread")
+
+
+def _recalibrate(a) -> int:
+    """Run the existing profile's calibration again with its own parameters; keep the old profile beside the new."""
+    eng = LlamaCpp(a.engine, a.port)
+    stem = f"{machine.detect().fingerprint()}-{sha256_head(a.model)}-{eng.name}"
+    path = PROFILES / profile.profile_name(stem, a.ubatch)
+    if not path.exists():
+        print(f"no profile to recalibrate: {path.name} is not in {PROFILES}; run `marian calibrate` first",
+              file=sys.stderr)
+        return 2
+    old = json.loads(path.read_text(encoding="utf-8"))
+    k = profile.calibration_params(old)
+    if not k["recorded"]:
+        print("this profile predates recorded calibration parameters: contexts, KV types and the probe are read from "
+              "its rows; the walk step, threads and cache options take calibrate's defaults")
+    keep = profile.archive_name(path, old)
+    path.replace(keep)
+    copt = CacheOptions(**k["cache"]) if k["cache"] else CacheOptions(tier_steps=2)
+    try:
+        out = profile.run(a.model, eng, k["ctx"], k["kv"], k["step"], k["threads"], PROFILES, k["n_predict"],
+                          vram_margin_mib=k["vram_margin_mib"], collapse=k["collapse"], cache=copt,
+                          sweep=ThreadOptions(enabled=k["thread_sweep"]), ubatch=a.ubatch,
+                          probe_prompt=k["probe_prompt"], repeats=a.repeats or k["repeats"])
+    except BaseException:
+        if not path.exists():
+            keep.replace(path)                           # a failed run leaves the old profile where the planner reads it
+        raise
+    new = json.loads(out.read_text(encoding="utf-8"))
+    cmp = profile.compare(old, new)
+    if a.json:
+        print(json.dumps(dict(cmp, profile=out.name, previous=keep.name)))
+    else:
+        print(f"recalibration written: {out}; the previous session is kept as {keep.name}")
+        print(f"{cmp['matched']} configurations measured in both sessions; {cmp['moved']} moved more than "
+              f"{cmp['band']:.0%} on decode")
+        for r in cmp["rows"]:
+            if r["moved"]:
+                cfg = {x: v for x, v in r["config"].items() if v is not None}
+                print(f"  {r['old_tg_tps']} -> {r['new_tg_tps']} tok/s ({r['ratio']:.2f}x)  {cfg}")
+        _report_trade(out)
+    return 0
 
 
 def _report_trade(out: Path) -> None:

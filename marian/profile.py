@@ -71,12 +71,14 @@ ubatch makes is visible; this code encodes no expectation of what that trade is.
 """
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import hashlib
 import http.client
 import json
 import os
 import re
+import statistics
 import threading
 import time
 from dataclasses import dataclass
@@ -87,6 +89,7 @@ from .engines import DEFAULT_UBATCH, P3_MISS_SOURCES, RING_DEFAULT_MIB, Config, 
 
 PROFILE_SCHEMA = 3        # 3: the declared ubatch and P3 prefill rows; 2: cache arms (M1.3); 1: M0
 PAIR_NOISE = 0.10         # prefill_pair: a speed difference within 10% is a tie (one probe per arm)
+REPEATS_MAX = 3           # probes per row: 1 by default, up to 3 on request (Chris, 30/10/2026; debt row 23)
 
 FILLER = ("The workshop opens at eight. Apprentices sign in, check the job board and collect their tools. "
           "Safety briefings come first, then practical tasks, then a short review before lunch. ")
@@ -137,8 +140,8 @@ def thread_ladder(physical: int | None, logical: int | None) -> list[int]:
 
 
 def thread_sweep(model: Path, engine, s: dict, ctx: int, kv: str, cell: list[dict], log: Path, total_vram: int,
-                 n_predict: int, margin_mib: int, ladder: list[int], probe_prompt: int | None = None
-                 ) -> tuple[list[dict], dict]:
+                 n_predict: int, margin_mib: int, ladder: list[int], probe_prompt: int | None = None,
+                 repeats: int = 1) -> tuple[list[dict], dict]:
     """The ladder at the fastest CPU-computing point of one walk cell; returns its rows and a summary."""
     summary: dict = {"ctx": ctx, "kv": kv}
     cpu = [r for r in cell if r["status"] == "ok" and not r.get("exact_class")]
@@ -154,7 +157,7 @@ def thread_sweep(model: Path, engine, s: dict, ctx: int, kv: str, cell: list[dic
         c = Config.from_row(best)
         c.threads = t
         row = dict(c.to_row(), arm="threads", exact_class=c.exact_class(s["block_count"]))
-        measure(engine, model, c, row, log, n_predict, probe_prompt)
+        measure(engine, model, c, row, log, n_predict, probe_prompt, repeats)
         judge(row, total_vram, margin_mib, 0.0, 0.6)       # VRAM only: fewer threads may rightly be slower
         rows.append(row)
         print(json.dumps(row), flush=True)
@@ -214,13 +217,29 @@ def probe_target(ctx: int, n_predict: int, probe_prompt: int | None = None) -> i
     return probe_prompt
 
 
-def probe(engine: LlamaCpp, ctx: int, n_predict: int, probe_prompt: int | None = None) -> dict:
+def check_repeats(repeats: int) -> None:
+    if not 1 <= repeats <= REPEATS_MAX:
+        raise ValueError(f"--repeats {repeats}: a row is probed 1 to {REPEATS_MAX} times")
+
+
+def probe(engine: LlamaCpp, ctx: int, n_predict: int, probe_prompt: int | None = None, repeats: int = 1) -> dict:
+    """One probe by default. With repeats > 1 the same server is probed again (a server is not restarted per probe),
+    every reading is kept (`tg_tps_runs`, `pp_tps_runs`), the row's figure is the median, and `tg_spread` is
+    (max - min) / median of decode. On 29/10/2026 (register E64) one probe per row scattered by 2x at the VRAM cliff;
+    the first probe on a fresh server is also the slow one (E68, E69), which a median of three outvotes."""
+    check_repeats(repeats)
     target = probe_target(ctx, n_predict, probe_prompt)
     unit = engine.tokenize(FILLER)
     text = FILLER * max(1, target // max(unit, 1))
-    t = engine.complete(text, n_predict)
-    return {"prompt_tokens": t.get("prompt_n"), "pp_tps": round(t.get("prompt_per_second", 0), 1),
-            "tg_tps": round(t.get("predicted_per_second", 0), 2)}
+    runs = [engine.complete(text, n_predict) for _ in range(repeats)]
+    tg = [round(t.get("predicted_per_second", 0), 2) for t in runs]
+    pp = [round(t.get("prompt_per_second", 0), 1) for t in runs]
+    out = {"prompt_tokens": runs[0].get("prompt_n"), "pp_tps": round(statistics.median(pp), 1),
+           "tg_tps": round(statistics.median(tg), 2)}
+    if repeats > 1:
+        out.update(tg_tps_runs=tg, pp_tps_runs=pp,
+                   tg_spread=round((max(tg) - min(tg)) / out["tg_tps"], 3) if out["tg_tps"] else None)
+    return out
 
 
 def splits(summary: dict, step: int) -> list[tuple[str, int]]:
@@ -262,7 +281,8 @@ def _log_since(log: Path, offset: int) -> str:
         return ""
 
 
-def measure(engine, model: Path, c: Config, row: dict, log: Path, n_predict: int, probe_prompt: int | None = None) -> dict:
+def measure(engine, model: Path, c: Config, row: dict, log: Path, n_predict: int, probe_prompt: int | None = None,
+            repeats: int = 1) -> dict:
     """Start one server for configuration c, probe it, stop it. Records speed, VRAM (peak, the desktop's baseline, the
     model's share), RAM (available before, lowest), commit headroom, the server's peak working set and commit, and what
     its log says; a refusal below the exactness floor becomes status `refused`, a miss source the fork did not use
@@ -279,7 +299,7 @@ def measure(engine, model: Path, c: Config, row: dict, log: Path, n_predict: int
             row.update(status="start_failed", note=why)
         else:
             try:
-                row.update(probe(engine, c.ctx, n_predict, probe_prompt))
+                row.update(probe(engine, c.ctx, n_predict, probe_prompt, repeats))
                 row["status"] = "ok"
             except (OSError, ValueError, http.client.HTTPException) as e:   # a timeout or a dropped server is a row
                 row.update(status="probe_failed", note=PATHLIKE.sub("<path>", f"{type(e).__name__}: {e}")[:200])
@@ -452,7 +472,7 @@ def ubatch_report(rows: list[dict]) -> list[dict]:
 def cache_arms(model: Path, engine, s: dict, geom, ctx: int, kv: str, threads: int | None, walk_rows: list[dict],
                log: Path, total_vram: int, n_predict: int, margin_mib: int, collapse: float,
                opt: CacheOptions, *, ubatch: int = DEFAULT_UBATCH, p3: bool = False,
-               probe_prompt: int | None = None) -> tuple[list[dict], dict]:
+               probe_prompt: int | None = None, repeats: int = 1) -> tuple[list[dict], dict]:
     """The cliff finder and the miss sources for one (context, KV) cell; returns its rows and a summary of the search.
     With p3 (the engine has --moe-prefill-source), every ring and tier row gets a P3-prefill twin, judged by
     prefill_pair."""
@@ -483,7 +503,7 @@ def cache_arms(model: Path, engine, s: dict, geom, ctx: int, kv: str, threads: i
         c = Config(ctx=ctx, cache_type=kv, threads=threads, n_gpu_layers=999, n_cpu_moe=n, load_mode="mmap",
                    moe_cache_mib=budget, ubatch=ubatch, **src)
         row = dict(c.to_row(), arm=arm, exact_class=c.exact_class(n))
-        measure(engine, model, c, row, log, n_predict, probe_prompt)
+        measure(engine, model, c, row, log, n_predict, probe_prompt, repeats)
         judge(row, total_vram, margin_mib, 0.0, collapse)            # VRAM near full; speed is judged by the caller
         rows.append(row)
         print(json.dumps(row), flush=True)
@@ -616,9 +636,10 @@ def profile_name(stem: str, ubatch: int) -> str:
 def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: int, threads: int | None,
         out_dir: Path, n_predict: int = 64, vram_margin_mib: int = 300, collapse: float = 0.6,
         cache: CacheOptions | None = None, sweep: ThreadOptions | None = None, ubatch: int = DEFAULT_UBATCH,
-        probe_prompt: int | None = None) -> Path:
+        probe_prompt: int | None = None, repeats: int = 1) -> Path:
     if ubatch < 1:
         raise ValueError(f"ubatch {ubatch} is not a positive token count")
+    check_repeats(repeats)
     for ctx in ctxs:                                      # refuse before any server starts, not halfway through
         probe_target(ctx, n_predict, probe_prompt)
     cache = cache or CacheOptions()
@@ -650,7 +671,7 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
                 else:
                     c.n_gpu_layers = k
                 row = dict(c.to_row(), arm="walk", exact_class=c.exact_class(s["block_count"]))
-                measure(engine, model, c, row, log, n_predict, probe_prompt)
+                measure(engine, model, c, row, log, n_predict, probe_prompt, repeats)
                 judge(row, total_vram, vram_margin_mib, best, collapse)
                 best = max(best, row["tg_tps"]) if row["status"] == "ok" else best
                 cell.append(row)
@@ -661,13 +682,14 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
             rows += cell
             if ladder:
                 trows, tsum = thread_sweep(model, engine, s, ctx, kv, cell, log, total_vram, n_predict,
-                                           vram_margin_mib, ladder, probe_prompt)
+                                           vram_margin_mib, ladder, probe_prompt, repeats)
                 rows += trows
                 sweeps.append(tsum)
             if with_cache:
                 crows, summary = cache_arms(model, engine, s, geom, ctx, kv, threads, cell, log, total_vram, n_predict,
                                             vram_margin_mib, collapse, cache, ubatch=ubatch,
-                                            p3=bool(caps.get("prefill_source")), probe_prompt=probe_prompt)
+                                            p3=bool(caps.get("prefill_source")), probe_prompt=probe_prompt,
+                                            repeats=repeats)
                 rows += crows
                 searches.append(summary)
     doc = {"marian_profile": PROFILE_SCHEMA,
@@ -680,6 +702,13 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
            "model": {"file": model.name, "id": sha256_head(model), **s}, "probe": ({"fill": 0.75, "n_predict": n_predict} if probe_prompt is None else
                      {"prompt_tokens": probe_prompt, "n_predict": n_predict}),
            "rows": rows}
+    if repeats > 1:
+        doc["probe"]["repeats"] = repeats
+    # what `marian recalibrate` needs to run this calibration again unchanged (no paths: the engine is named, not located)
+    doc["calibration"] = {"ctx": ctxs, "kv": kvs, "step": step, "threads": threads, "n_predict": n_predict,
+                          "probe_prompt": probe_prompt, "repeats": repeats, "vram_margin_mib": vram_margin_mib,
+                          "collapse": collapse, "thread_sweep": sweep.enabled,
+                          "cache": {k: v for k, v in dataclasses.asdict(cache).items() if k != "n_ubatch"}}
     if with_cache:
         doc["cache_search"] = {"ram_floor_mib": cache.ram_floor_mib, "resolution_mib": cache.resolution_mib,
                                "cells": searches}
@@ -697,3 +726,54 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
         out.replace(out.with_name(out.name + ".prev"))
     out.write_text(json.dumps(doc, indent=1), encoding="utf-8")
     return out
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Re-calibration (Chris, 30/10/2026): run a profile's calibration again, unchanged, as a new dated session.
+
+RECAL_BAND = 0.15         # a row whose decode moved more than this between sessions is reported (row 23's 15% bar)
+
+
+def calibration_params(doc: dict) -> dict:
+    """The parameters a profile was calibrated with. Profiles written from 30/10/2026 record them (`calibration`);
+    for older ones they are read back from the rows and the probe record, and the walk step, thread count and cache
+    options take calibrate's defaults (an older profile did not record them, so `recorded` is False)."""
+    if doc.get("calibration"):
+        return dict(doc["calibration"], recorded=True)
+    rows = doc.get("rows") or []
+    probe_doc = doc.get("probe") or {}
+    ctxs = sorted({r["ctx"] for r in rows if "ctx" in r})
+    kvs = list(dict.fromkeys(r["kv"] for r in rows if "kv" in r))
+    return {"ctx": ctxs, "kv": kvs, "step": 2, "threads": None, "n_predict": probe_doc.get("n_predict", 32),
+            "probe_prompt": probe_doc.get("prompt_tokens"), "repeats": probe_doc.get("repeats", 1),
+            "vram_margin_mib": 300, "collapse": 0.6, "thread_sweep": True, "cache": {}, "recorded": False}
+
+
+def archive_name(path: Path, doc: dict) -> Path:
+    """Where the old profile is kept: beside it, named by when it was measured, and not ending in .json, so the
+    planner never loads it (plan.load_docs globs *.json)."""
+    stamp = (doc.get("measured_utc") or "unknown").replace(":", "").replace("-", "").replace("+0000", "Z")
+    return path.with_name(f"{path.name}.{stamp}")
+
+
+def row_key(r: dict) -> tuple:
+    """A row's configuration, without its measurements: two sessions' rows with the same key ran the same server."""
+    keep = {k: r.get(k) for k in Config.from_row(r).to_row()}
+    keep["arm"] = r.get("arm")
+    return tuple(sorted(keep.items(), key=lambda kv: kv[0]))
+
+
+def compare(old: dict, new: dict, band: float = RECAL_BAND) -> dict:
+    """Old against new decode for every configuration measured ok in both sessions, and which moved beyond the band.
+    It reports; it changes nothing (the planner always reads the newest profile)."""
+    olds = {row_key(r): r for r in old.get("rows") or [] if r.get("status") == "ok"}
+    pairs = []
+    for r in new.get("rows") or []:
+        o = olds.get(row_key(r))
+        if o is None or r.get("status") != "ok" or not o.get("tg_tps"):
+            continue
+        ratio = r["tg_tps"] / o["tg_tps"]
+        pairs.append({"config": dict(row_key(r)), "old_tg_tps": o["tg_tps"], "new_tg_tps": r["tg_tps"],
+                      "ratio": round(ratio, 3), "moved": abs(ratio - 1) > band})
+    return {"old_measured_utc": old.get("measured_utc"), "new_measured_utc": new.get("measured_utc"),
+            "matched": len(pairs), "moved": sum(p["moved"] for p in pairs), "band": band, "rows": pairs}

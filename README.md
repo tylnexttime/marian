@@ -78,7 +78,7 @@ These are why a measuring tool matters. Sources and conditions for every figure 
   own exact plan decoded a median 11.6 tok/s against stock's best 12.1 (0.96x), faster in 2 of 5 rounds, while
   staying identical to all-VRAM in every round. The cause is calibration, not the cache: one probe per row scattered
   by 2x at the VRAM cliff (the chosen row read 39.4 tok/s in calibration), so the planner ranked rows on luck. Repeated
-  probes through serve's own request loop come first (dev-debt row 23); M1.6 then runs again unchanged.
+  probes through serve's own request loop come first (dev-debt row 23; `calibrate --repeats N` and `marian recalibrate` built 30/10); M1.6 then runs again unchanged.
 
 ## How it fits together
 
