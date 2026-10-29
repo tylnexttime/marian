@@ -73,8 +73,12 @@ These are why a measuring tool matters. Sources and conditions for every figure 
   with the prefill patches) confirmed it: Marian's exact plan decoded 6.7 tok/s against stock's 12.0 and prefilled
   23 against 978 at 4K, and the planner, unrestricted, picks stock there. One exact row that the plan's safety
   margin excluded decoded 31.4 tok/s, 2.6x stock, but still prefilled 5x slower. A measuring tool that tells you the plain option wins is
-  doing its job. The planner no longer loses that row to a small VRAM drift (register E63), and whether exact Marian
-  wins decode after short prompts on that laptop is the next registered milestone (M1.6, E64), not yet run.
+  doing its job. The planner no longer loses that row to a small VRAM drift (register E63). The next milestone,
+  exact decode after short prompts on that laptop (M1.6, register E64, 29/10/2026), **failed as written**: Marian's
+  own exact plan decoded a median 11.6 tok/s against stock's best 12.1 (0.96x), faster in 2 of 5 rounds, while
+  staying identical to all-VRAM in every round. The cause is calibration, not the cache: one probe per row scattered
+  by 2x at the VRAM cliff (the chosen row read 39.4 tok/s in calibration), so the planner ranked rows on luck. Repeated
+  probes through serve's own request loop come first (dev-debt row 23); M1.6 then runs again unchanged.
 
 ## How it fits together
 
@@ -271,7 +275,10 @@ Be warned; this is research code.
   moved and the same CPU and GPU utilisation; one 2x slump (7.8 against 16.5 tok/s, stock) came with the CPU held
   below its base clock. GPU logs since 28/10 show the GPU idling between bursts at 800-1,200 MHz during decode, so the
   platform's power state is the leading suspect. One part of it is ruled out: register E62 set NVIDIA's "Prefer
-  maximum performance" for llama-server only, and decode and clocks did not move (0.95x, the setting restored). Since 28/10 every registered speed run first runs
+  maximum performance" for llama-server only, and decode and clocks did not move (0.95x, the setting restored). On
+  29/10 the vendor's power manager was ruled out at both layers: stopping OMEN Command Center's user processes (E66,
+  1.015x) and then its Windows service (E67, 0.987x), each in interleaved on/off pairs. Both tests' GPU logs show the
+  GPU busy for only 28-30% of each token, so the host side of a token is what gets measured next. Since 28/10 every registered speed run first runs
   `tools/prerun/prerun_check.py` (power plan and source, thermal limits, CPU and drive probes, GPU clocks, power
   limit and clock-event reasons, free memory, the busiest processes) and logs GPU clocks beside the run; comparisons
   that matter are made inside one session, interleaved. Figures from different sessions in this README can differ
@@ -514,8 +521,9 @@ The living roadmap, with the evidence behind each item and the dev debt, is
 short: rebase onto current upstream (done); make prefill the main target (expert page faults were the cost, not
 Swift's embedding table; prefill misses can now come from P3, opt-in, and a declared ubatch of 2048 reached stock's
 prefill exactly; next, fewer bytes per prompt); calibration v1 with Windows pinning and RAM-safety rules; then the
-8 GB laptop under RAM pressure (measured 28/10: stock wins it, and the planner picks stock); then, registered 28/10
-and not yet run, exact decode after short prompts on that laptop (M1.6). The milestones from
+8 GB laptop under RAM pressure (measured 28/10: stock wins it, and the planner picks stock); then exact decode after
+short prompts on that laptop (M1.6, measured 29/10: failed, exact, because calibration's single probe ranked rows on
+luck; repeated probes come next). The milestones from
 [DESIGN-M1 section 10](docs/design/DESIGN-M1.md), reshaped by what M1.0 measured:
 
 - **M1.2:** a ranked policy (ranked core, warm start, doorkeeper, transient slots, budgets by need), with a bitwise
