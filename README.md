@@ -379,6 +379,22 @@ The confirmation, five interleaved rounds (T S | S T | T S | S T | T S), all-tok
 | 4 | 14.5 | 9.5 | 13.7 | 3.9 | 34.4 / 141.8 |
 | 5 | 14.6 | 8.2 | 13.5 | 8.5 | 30.3 / 154.8 |
 
+Nanbeige4.3-33B (dense, full attention in all 52 layers) on the whole 16 GB reference laptop, stock layer offload at
+the largest split that fits, 30/10/2026 (tok/s, median of 10 prompts, two runs; register E76). These are **sustained**
+speeds: a fresh burst on this laptop ran about twice as fast (Q3_K_M 8K: 15.4) and settled to the figure below within
+3-4 minutes of continuous decoding, which looks like the laptop's power and thermal budget, not the model:
+
+| Quant, context, KV | Layers on GPU | Decode | Prefill | Decode after the long prompt |
+|---|---|---|---|---|
+| Q3_K_M, 8K, f16 KV | 47 of 53 | 7.3-7.4 | 641-662 (5.5K prompt) | 6.2-8.3 |
+| Q3_K_M, 32K, q8_0 KV | 43 | 6.9-8.2 | 465-486 (20K prompt) | 1.9-3.0 |
+| Q4_K_M, 8K, f16 KV | 38 | 4.5-4.7 | 392-402 (5.5K prompt) | 4.6-4.7 |
+| Q4_K_M, 32K, q8_0 KV | 34 | 4.4 | 305-313 (20K prompt) | 1.1-1.7 |
+
+A dense model with layers on the CPU is never in Marian's exact class; these rows say what stock llama.cpp does with
+it here. q8_0 KV changes answers (mean KLD 0.0083 against f16 KV, same top token 96.2%, register E74); q4_0 KV was
+measured too costly (KLD 0.088, top token 88%) and is not used.
+
 Everything else, with conditions and what each table taught us: [docs/JOURNEY.md](docs/JOURNEY.md).
 
 ## Quick start (M0 and M1.3; standard library only, Python 3.10+)
