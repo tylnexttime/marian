@@ -545,6 +545,37 @@ at `-ub 2048`, does the cache path equal all-VRAM at `-ub 2048`?
   stock on 16K and 4K prefill, warm decode and decode after 16K, exactly, which makes it the likely contender for the
   8 GB milestone.
 
+## 6d. Friday 30/10/2026: calibration narrowed, the KV lever measured, and a laptop that throttles
+
+Eight registered tests (E68-E75) and one characterisation (E76), each written into the register before it ran.
+
+**1. Why did E64's chosen row read 39.4 in calibration and 11.6 in the rounds?** Three causes were tested in turn.
+The filler probe does not flatter a cached row: its expert-cache hit rate was 91.2% against 88.2% for real prompts
+(E68, NO BIAS). The memory regime is not it either: under a true 25 GiB load the row decodes at 9-11 tok/s whether the
+RAM ballast is fresh or held (E69 NO DECISION, then E70 NO REGIME). So the rounds were the honest figure and the
+calibration reading is the outlier (A43). On that, Chris ruled the calibration design: **one probe stays the default,
+`calibrate --repeats N` (1-3) is an option, and `marian recalibrate` re-runs a profile's own calibration as a new
+session**, keeping the old one and listing the rows that moved more than 15%. Both were built the same morning.
+
+**2. Is the KV cache a lever?** Chris expected it to change things a lot. Moving it off the GPU (`-nkvo`) hurt on
+Gemma, a sliding-window model with little KV (E71: half the short-prompt decode, a sixth after 16K), though it turned
+out exact; and it did not pay on a dense full-attention model either (E72, Nanbeige4.3-33B: eight more GPU layers,
+no faster, slower at depth). Quantising the KV instead keeps attention on the GPU: on short prompts no clear win
+(E73), after a 20K prompt 1.5-1.6x in every round (A45). The quality check settled the 4-bit option: q8_0 KV is OK
+(mean KLD 0.0083, same top token 96.2%), q4_0 is costly (KLD 0.088, wrong top token about 1 in 8) although its
+perplexity looked better than q8_0's (E74, A46). q8_0's speed then failed the 1.20x-every-round bar twice (E74, E75),
+so it is documented, not built.
+
+**3. Quant variants become a standing test axis** (Chris): one model at several quants moves the same architecture
+across the VRAM and RAM limits. Nanbeige4.3-33B (dense, released that week) was downloaded at Q3_K_M, Q4_K_M and
+Q8_0, the last larger than this laptop's RAM.
+
+**4. The laptop throttles.** Measuring Nanbeige on the whole card (E76, A47), the unmeasured first run held 15.4
+tok/s for ten prompts; the same configuration two minutes later settled at 7.3 within three prompts. Under sustained
+decode this laptop runs at about half its fresh speed within 3-4 minutes, which is the likeliest reading of E75's
+drift and of debt row 17's 2x slumps. Chris's reading: the laptop had been quiet, so instead of spinning its fans up
+it throttles itself. The next test of row 17 forces the fans and logs power and clocks during the run.
+
 ## 7. What is next
 
 The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
@@ -640,6 +671,10 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 | 28/10 | `pwsh -File script.ps1 -Tags a,b` passes "a,b" as one string, so E62's first P call ran one arm | renamed and the second arm run on its own; disclosed in E62 |
 | 28/10 | E63's drift rungs were first rounded down to 64 MiB, which made a 551 MiB step: more than the one-row bound | caught by the new test before any GPU run; rounded up instead, disclosed in E63 |
 | 28/10 | prediction: E63 PASS, about 75% (the risk: a rung's measured share not stepping with its budget) | right; the shares stepped (7,485 and 6,847 MiB at 3,776 and 3,264), though the 300 MiB case moved nothing because the plan already chose a rung |
+| 30/10 | calling E64's 0.29x "luck" before testing the probe's content and the memory regime | tested both (E68, E70); both struck; the calibration reading is the outlier |
+| 30/10 | three wrong KV predictions (`-nkvo` would change answers; Nanbeige would gain from `-nkvo`; q4_0 KV would win on short prompts) | each recorded as wrong in its entry; the gain was at depth, and quality was checked by KL divergence |
+| 30/10 | a fit check judged by `nvidia-smi`, which saturates when Windows spills VRAM | void, rebuilt on llama.cpp's own memory breakdown |
+| 30/10 | a register header written with an estimated time, twice | caught by the clock read after writing; corrected in the entries |
 
 ---
 
@@ -1652,3 +1687,78 @@ Taught us: the biggest CPU consumer since boot was not the bottleneck, and neith
 GPU logs beside both tests were the useful part: the GPU is busy for under a third of each token, at about half its
 clock. Whatever slowed this laptop on 27/10 lives on the host side of a token, and that is what to measure next,
 rather than another process to switch off.
+
+#### A43. E68-E70: three causes for E64's 0.29x, two struck
+
+Conditions: E64's chosen row (`-ncmoe 30 --moe-cache-mib 3136`, mmap misses), Gemma 4 26B-A4B IQ4_XS, context 8,192.
+
+| Test | Question | Result |
+|---|---|---|
+| E68, no ballast | does the filler probe hit the cache more than real prompts? | 91.19% against 88.23% (+2.95 points, NO BIAS); speed 0.86-1.14x |
+| E69, 8 GB + 25 GiB, ballast held | does the probe read faster under pressure? | 0.37x, 1.26x, 1.19x: NO DECISION; the first arm after the ballast read 12.9 |
+| E70, same, fresh against held ballast | is the regime the cause? | 0.89x median, every arm 8.6-11.0 tok/s: NO REGIME |
+
+Taught us: the rounds were right and the calibration reading was the outlier. E69's apparent recovery came from a
+RAM ballast sized against a baseline that later shrank (8.2 GiB held against 14-18 in E70), so an 8 GB + 25 GiB
+result now needs the machine's in-use memory logged over time.
+
+#### A44. E71: KV in RAM on Gemma
+
+Conditions: 8 GB cap, context 32,768, no RAM ballast. Gemma's KV is small (sliding-window attention): moving it frees
+918 MiB.
+
+| | KV in VRAM, cache 3,584 | KV in RAM, cache 4,480 | KV in RAM, cache 3,584 |
+|---|---|---|---|
+| Short decode (tok/s) | 46.8-47.9 | 14.7-25.0 | 19.8-21.6 |
+| Decode after 16K | 36.7-41.1 | 4.4-6.8 | 6.8-7.5 |
+| Hit rate | 91.1% | 94.6% | 91.1% |
+
+Taught us: the freed VRAM reached the cache, and was worth far less than attention moved to the CPU. `-nkvo` was
+exact against all-VRAM on every request, which was not expected.
+
+#### A45. E72-E73: KV against layers on a dense full-attention model
+
+Conditions: Nanbeige4.3-33B Q3_K_M, 8 GB cap, context 32,768. Fit check: f16 KV 18 layers, `-nkvo` 26, q8_0 KV 21,
+q4_0 KV 23.
+
+| Arm | Short decode (tok/s) | Decode after a 20K prompt | 16K prefill |
+|---|---|---|---|
+| f16 KV, 18 layers | 3.0-4.1 | 0.68-1.09 | 232-249 |
+| `-nkvo`, 26 layers | 3.4-3.6 | 0.72-0.99 | 259-262 |
+| q8_0 KV, 21 layers | 3.2-3.7 | 0.96-1.08 | 261-269 |
+| q4_0 KV, 23 layers | 3.0-3.7 | 1.07-1.22 | 281-284 |
+
+Taught us: on short prompts a dense model with most layers on the CPU is bound by those layers' weight bytes, and a
+few more GPU layers hide in the noise. After a long prompt the KV bytes dominate, and shrinking them pays.
+
+#### A46. E74-E75: what q8_0 and q4_0 KV cost, and q8_0's speed twice
+
+Quality (llama.cpp KL divergence against f16 KV's logits, two 32K chunks of a frozen text):
+
+| | Mean KLD | 99th percentile | Same top token | Perplexity ratio |
+|---|---|---|---|---|
+| f16 against itself (control) | 0.000000 | 0.000037 | 99.994% | 1.0010 |
+| q8_0 KV | 0.0083 | 0.089 | 96.19% | 1.0117 |
+| q4_0 KV | 0.0884 | 1.22 | 88.15% | 1.0041 |
+
+Speed after two long prompts, q8_0 against f16: E74 0.94, 1.16, 1.31; E75 (an unmeasured settle run first, five
+rounds) 0.97, 0.95, 1.31, 1.29, 1.14. Both NO DECISION against a 1.20x-every-round bar.
+
+Taught us: perplexity alone would have passed q4_0 KV. And the speed ratio grew with time through the chain while
+f16 slowed (0.76 to 0.51) and q8_0 held, which led to A47.
+
+#### A47. E76: Nanbeige4.3-33B on the whole 16 GB card, sustained
+
+Conditions: no ballast, the largest split that fits by llama.cpp's own memory breakdown (a first fit check judged by
+`nvidia-smi` was void: its reading saturates near the card's size when Windows spills VRAM into shared memory).
+
+| Quant, context, KV | Layers | Decode, two runs | Prefill | After the long prompt |
+|---|---|---|---|---|
+| Q3_K_M, 8K, f16 | 47 | 7.41, 7.29 | 641-662 | 6.2-8.3 |
+| Q3_K_M, 32K, q8_0 | 43 | 6.88, 8.18 | 465-486 | 1.9-3.0 |
+| Q4_K_M, 8K, f16 | 38 | 4.49, 4.70 | 392-402 | 4.6-4.7 |
+| Q4_K_M, 32K, q8_0 | 34 | 4.36, 4.44 | 305-313 | 1.1-1.7 |
+
+The unmeasured first run of the Q3_K_M 8K configuration read 15.4 (14.0-15.9 for ten prompts), and the next run
+settled at 7.0-7.7 by its third prompt. Taught us: on this laptop a fresh burst is about twice the sustained speed,
+and a measurement taken at rest before a run cannot see the difference.

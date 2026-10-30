@@ -77,8 +77,13 @@ These are why a measuring tool matters. Sources and conditions for every figure 
   exact decode after short prompts on that laptop (M1.6, register E64, 29/10/2026), **failed as written**: Marian's
   own exact plan decoded a median 11.6 tok/s against stock's best 12.1 (0.96x), faster in 2 of 5 rounds, while
   staying identical to all-VRAM in every round. The cause is calibration, not the cache: one probe per row scattered
-  by 2x at the VRAM cliff (the chosen row read 39.4 tok/s in calibration), so the planner ranked rows on luck. Repeated
-  probes through serve's own request loop come first (dev-debt row 23; `calibrate --repeats N` and `marian recalibrate` built 30/10); M1.6 then runs again unchanged.
+  by 2x at the VRAM cliff (the chosen row read 39.4 tok/s in calibration), so the planner ranked rows on luck. Three
+  tests on 30/10 narrowed it: the probe's filler text does not flatter a cached row, and the memory regime is not it
+  either; under a true 25 GiB load that row decodes at 9-11 tok/s, so the rounds were right and the calibration
+  reading was the outlier (register E68-E70). `calibrate --repeats N` (1-3, default 1) and `marian recalibrate` were
+  built that day (dev-debt row 23); M1.6 then runs again unchanged. The same day showed the reference laptop
+  **throttles to about half its fresh speed within minutes of continuous decoding** (E76), so every figure here is
+  read with its date, and the sustained one is the honest one.
 
 ## How it fits together
 
