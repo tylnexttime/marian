@@ -1762,3 +1762,29 @@ Conditions: no ballast, the largest split that fits by llama.cpp's own memory br
 The unmeasured first run of the Q3_K_M 8K configuration read 15.4 (14.0-15.9 for ten prompts), and the next run
 settled at 7.0-7.7 by its third prompt. Taught us: on this laptop a fresh burst is about twice the sustained speed,
 and a measurement taken at rest before a run cannot see the difference.
+
+### 04/11/2026
+
+#### A48. E77: the fourth rebase, the first with a conflict
+
+Conditions: upstream `6cb3e672e` (119 commits after `2e0d86beb`), the nine patches cherry-picked with one conflict: P3
+against upstream's `fused_kv_rows` block, resolved by keeping both, context-only. New in this check: all-VRAM on the old
+build against all-VRAM on the new, reported rather than judged, because a fault common to every arm cannot show in a
+cache-against-all-VRAM comparison.
+
+| Check | Result |
+|---|---|
+| Unit tests | Python 184, trace-id test 1/1, `ctest -L main` 17/17: `test-llama-context` (row 22) passes |
+| Gemma: every cache arm against all-VRAM | 10/10 identical each, max difference 0; contrast 0/10, 0.590 |
+| Groot: cache at 2,500 and 5,000 MiB, tier, ring, ring + P3 prefill, against all-VRAM | 10/10 identical each, max difference 0; contrast 0/10, 0.658 |
+| Groot, every CUDA fusion off: cache against all-VRAM | identical |
+| All-VRAM, old build against new | Gemma identical; **Groot 1/10 records keep their tokens, max 0.388, earliest divergence token 5** |
+| The old build today against the same build on 29/10 | identical on both models, so the movement is real |
+| Swift T8, new/old, same session | 1.03 warm, 1.11 after a 16K prompt (first pair alone 1.03, 0.995); records identical |
+| Decode exit, reported | missed by both builds: 6.62 warm, 5.98 after 16K, about half of 29/10 |
+
+Taught us: exactness and stability are different claims. Marian's cache is exact against all-VRAM on each build, and that
+held, while upstream moved Groot's all-VRAM answers underneath it. The question that catches that was added only this
+time, and one prediction was wrong: the Gemma change expected to move answers moved nothing. Also: the speed clause passed
+on one slow run of the old build, which overlapped other work on this laptop; the first pair alone still passes, but the
+check only rules out a regression above about 10%.
