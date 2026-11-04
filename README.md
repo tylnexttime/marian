@@ -16,7 +16,7 @@ Marian has two layers.
 1. **M0, a measuring tool** (Python, standard library only). It measures how a model behaves on *this* machine:
    speed and memory for each context size, KV-cache type and GPU/CPU split. Then it picks the fastest configuration
    that fits a request and launches it. It never extrapolates: if nothing measured fits, it says so.
-2. **M1, a thin fork of llama.cpp** (pinned at upstream commit [`2e0d86beb`](https://github.com/ggml-org/llama.cpp/commit/2e0d86beb), release b11976). Mixture-of-experts (MoE) models only use a
+2. **M1, a thin fork of llama.cpp** (pinned at upstream commit [`6cb3e672e`](https://github.com/ggml-org/llama.cpp/commit/6cb3e672e), 16 commits after release b12079). Mixture-of-experts (MoE) models only use a
    few of their "experts" for each token. M1 keeps the most-used experts in GPU memory (VRAM) **one expert at a time,
    not one whole layer at a time**, and fetches the rest from system RAM or the SSD as fast as the machine allows. It
    builds on upstream llama.cpp's own expert cache (`--moe-cache-mib`). It is **exact by default**: speed-ups that can
@@ -122,8 +122,10 @@ These are why a measuring tool matters. Sources and conditions for every figure 
 The patches are in [docs/m1.0/patches](docs/m1.0/patches) (P0), [docs/m1.1/patches](docs/m1.1/patches) (0001
 exactness floor, 0002 fill trace, 0003 P3 minimal), [docs/m1.2/patches](docs/m1.2/patches) (0004 routing-id trace,
 0005 its review fixes) and [docs/m1.3/patches](docs/m1.3/patches) (0007 tier safety, 0008 prefill source, 0009 the
-prefill-source switch), as `git format-patch` files on top of `338fce651`, applied in that order. There is no 0006.
-They also apply unchanged to `63b4b303`, the previous pin, where every measurement of 27/10/2026 was taken.
+prefill-source switch), as `git format-patch` files on top of `6cb3e672e`, applied in that order. There is no 0006.
+Applied with `git am` on a clean `6cb3e672e`, they rebuild the tested tree exactly (checked 04/11/2026). 0003 and 0009
+were regenerated for this pin, with context-only changes. The versions that applied to the earlier pins, where the
+earlier measurements were taken, are in this repository's history.
 
 ## Inspirations and prior art
 
@@ -273,12 +275,21 @@ Be warned; this is research code.
   after a 16K prompt). Groot is the third model family Marian has run. **One upstream unit test fails at this commit,
   and not because of Marian:** `test-llama-context` aborts on an unexpected graph reallocation in its model sweep, and
   fails the same way on upstream `2e0d86beb` built with no Marian patch (dev-debt row 22).
-  On 04/11/2026 a move to `6cb3e672e` was checked and **withdrawn the same day** (E77, E78; dev-debt row 24). It was exact: every
-  cache arm of Gemma and Groot identical to all-VRAM, all tests passing. Its speed passed once (1.03 warm, 1.11 after a 16K prompt), and
-  the pre-registered re-check failed at 0.88 after a 16K prompt (0.99 warm), against a limit of 0.90, so the pin stays here. One run of
-  the eight carries that number, and pooled the eight read 1.00, but that pooling was not the rule; the move needs a new registered
-  test. Also from those checks: **on that base Groot's all-VRAM answers change** (1 of 10 records keeps its tokens, cause upstream, not
-  bisected), and **this laptop now decodes Swift at about half its 29/10 speed on both builds** (about 6.4 tok/s warm, dev-debt row 17).
+  On 04/11/2026 it moved to `6cb3e672e` (119 commits, one mechanical conflict in patch 0003, no Marian line changed)
+  and was re-checked (E77). Every cache arm of Gemma and Groot is identical to all-VRAM, and all unit tests pass (the
+  `test-llama-context` failure above is gone at this commit). **The speed took three tests, and the move was withdrawn and
+  landed again the same day.** E77 passed at 1.03 warm and 1.11 after a 16K prompt, leaning on one slow old-build run. A
+  registered re-check (E78, two runs a build) failed at 0.881 after a 16K prompt, against a limit of 0.90, so the move
+  was reverted. E80, registered next with four runs a build, read **0.995 warm and 0.991 after a 16K prompt**, with
+  answers identical across all eight runs, and by its rule the move came back. The extra runs were chosen after seeing
+  E78's failure, and the limit did not change; a slowdown under about 10% is not ruled out. **The decode exit was missed
+  by both builds, by far:** about 6.5 warm and 6.0 after a 16K prompt, about half of the 29/10 figures (dev-debt row 17; the
+  build is not the cause). Holding the GPU at full clocks with a separate small load (E79) lifted warm decode only 1.07x, at
+  about 3x the power, so the low clock is not the main cause, with the caveat that the load shares the GPU. **Groot's answers changed between these two pins**,
+  on all-VRAM with no Marian path in use: 1 of 10 records keeps its tokens, the earliest divergence is token 5, max
+  log-probability difference 0.388. So Groot output is not comparable across `2e0d86beb` and `6cb3e672e`. The cause
+  is upstream and not named (not bisected; a Q8_1 fix, `8fc037672`, is the suspect). Gemma's and Swift's answers did
+  not move. Not proven on this pin: a Gemma 4 MoE with KV-shared layers, because our file has none.
 - **The reference laptop's speed moved by about 20%, and the cause is narrowed, not named** (dev-debt row 17). The
   Swift tier decoded 15.1-15.2 tok/s on the morning of 27/10/2026 and 11.6-13.0 from that afternoon on, through a
   reboot. Register E60 ran that morning's own binary with that morning's own arguments beside today's build: 0.96x,
