@@ -1765,26 +1765,22 @@ and a measurement taken at rest before a run cannot see the difference.
 
 ### 04/11/2026
 
-#### A48. E77: the fourth rebase, the first with a conflict
+#### A48. E77 and E78: a rebase that passed, was pushed, and came back
 
-Conditions: upstream `6cb3e672e` (119 commits after `2e0d86beb`), the nine patches cherry-picked with one conflict: P3
-against upstream's `fused_kv_rows` block, resolved by keeping both, context-only. New in this check: all-VRAM on the old
-build against all-VRAM on the new, reported rather than judged, because a fault common to every arm cannot show in a
-cache-against-all-VRAM comparison.
+Conditions: upstream `6cb3e672e` (119 commits after `2e0d86beb`), the nine patches with one conflict, context only. New in the check: all-VRAM on the old build
+against the new, reported, because a fault common to every arm cannot show in a cache-against-all-VRAM comparison.
 
 | Check | Result |
 |---|---|
-| Unit tests | Python 184, trace-id test 1/1, `ctest -L main` 17/17: `test-llama-context` (row 22) passes |
-| Gemma: every cache arm against all-VRAM | 10/10 identical each, max difference 0; contrast 0/10, 0.590 |
-| Groot: cache at 2,500 and 5,000 MiB, tier, ring, ring + P3 prefill, against all-VRAM | 10/10 identical each, max difference 0; contrast 0/10, 0.658 |
-| Groot, every CUDA fusion off: cache against all-VRAM | identical |
+| Unit tests | Python 184, trace-id test 1/1, `ctest -L main` 17/17 |
+| Gemma and Groot: every cache arm against all-VRAM | 10/10 identical each, max difference 0; contrasts differ |
 | All-VRAM, old build against new | Gemma identical; **Groot 1/10 records keep their tokens, max 0.388, earliest divergence token 5** |
-| The old build today against the same build on 29/10 | identical on both models, so the movement is real |
-| Swift T8, new/old, same session | 1.03 warm, 1.11 after a 16K prompt (first pair alone 1.03, 0.995); records identical |
-| Decode exit, reported | missed by both builds: 6.62 warm, 5.98 after 16K, about half of 29/10 |
+| Swift T8 new/old, E77 | 1.03 warm, 1.11 after a 16K prompt; records identical |
+| Swift T8 new/old, E78, the registered re-check | 0.985 warm, **0.881 after a 16K prompt**, limit 0.90; records identical |
+| Decode, both builds, both checks | about 6.4 tok/s warm, half of 29/10; GPU core about 480 MHz against about 1,100 |
 
-Taught us: exactness and stability are different claims. Marian's cache is exact against all-VRAM on each build, and that
-held, while upstream moved Groot's all-VRAM answers underneath it. The question that catches that was added only this
-time, and one prediction was wrong: the Gemma change expected to move answers moved nothing. Also: the speed clause passed
-on one slow run of the old build, which overlapped other work on this laptop; the first pair alone still passes, but the
-check only rules out a regression above about 10%.
+E77 passed and was pushed, though its speed figure leaned on one slow run, so a re-check was registered with a revert written into its failing branch. It failed, on one run, and was reverted.
+
+Taught us: the post-16K figure is two requests, and in six of eight runs they read about (8.3, 4.5). The other two, one on each build, fell lower. So a two-run median of it can fail on one bad run: pooled, the eight read 1.00. That
+is probably noise, but saying so after the rule fired is what a rule exists to prevent. The next attempt needs more pairs, decided first. And exactness and stability are different claims: the cache stayed exact against all-VRAM
+on each build while upstream moved Groot's all-VRAM answers underneath it.
