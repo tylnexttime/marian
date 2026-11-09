@@ -386,7 +386,7 @@ class Proxy(unittest.TestCase):
             self.assertIn(b"Hel", first)
             self.assertNotIn(b'"timings"', first)       # not buffered: the last event has not been written yet
             self.assertLess(time.monotonic() - t0, 5)
-            self.assertTrue(eng.up.first_event_sent.is_set())
+            self.assertTrue(eng.up.first_event_sent.wait(5))   # the fake sets it just after its flush: wait, do not race it
             eng.up.hold.set()
             rest = r.read()
             self.assertIn(b'"timings"', rest)
