@@ -1,0 +1,30 @@
+name: CI
+
+# The offline Python suite: standard library only, no GPU, no model file, no network.
+# It does not build or run the llama.cpp fork; the fork's exactness and speed checks need a GPU
+# and are recorded in docs/JOURNEY.md.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python-suite:
+    name: Python suite (${{ matrix.os }}, ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Run the offline tests
+        run: python -m unittest discover -s tests
