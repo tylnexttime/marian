@@ -9,6 +9,15 @@ prefill patches (0007-0009) measured the same day (register E51, E54), and the P
 source and a declared ubatch (offline tests only). The full
 story, every measured table and the mistakes are in [docs/JOURNEY.md](docs/JOURNEY.md).
 
+**In maintenance since 10/11/2026.** The llama.cpp fork stays pinned at `6cb3e672e` and is no longer rebased
+weekly. A fifth rebase, onto upstream `0a94a3f28` (140 commits on, with upstream's SLRU expert cache replaced by
+ClassLRU), was built and tested. It was **exact**: every cache, tier and ring arm stayed identical to all-VRAM on two
+models. It was also **slower**: warm decode at **0.892** of the pinned build over twelve interleaved runs (0.914
+after a 16K prompt), against a limit of 0.90 written down before the first run, with 10.1% more cache misses in every
+trace. By that rule it did not land. The numbers, the rule, and what is still unmeasured are in
+[JOURNEY section 6e](docs/JOURNEY.md#6e-tuesday-10112026-the-fifth-rebase-is-exact-and-slower-and-the-fork-goes-to-maintenance). Everything below describes the pinned build, which still builds and passes its tests; the
+M0 measuring tool does not depend on the fork.
+
 ## What it does
 
 Marian has two layers.
@@ -98,7 +107,7 @@ These are why a measuring tool matters. Sources and conditions for every figure 
  |    tier safety      the pinned tier capped, and pinned in chunks of at most 1 GiB  |
  |    P3 prefill       large-batch misses from the same ring and tier (opt-in)        |
  +------------------------------------------------------------------------------------+
- |  upstream llama.cpp at 338fce651: --moe-cache-mib per-expert VRAM cache (SLRU),    |
+ |  upstream llama.cpp at 6cb3e672e: --moe-cache-mib per-expert VRAM cache (SLRU),    |
  |  MUL_MAT_ID on the cache bank, selective expert copy for large batches             |
  +------------------------------------------------------------------------------------+
 ```
@@ -340,8 +349,10 @@ faster than the best, and the plan chose it. The cache arms
   - **What is still exact:** the cache and tier arm matched all-VRAM on every request, reused prefixes included. The
     miss path is exact; the reuse is not.
   - **What it would buy:** 83% of prompt tokens saved, so it remains available as an opt-in, answer-changing switch.
-- Upstream llama.cpp moves several times a day. We rebase weekly, or at once when upstream touches what Marian
-  runs, and re-prove exactness every time (ROADMAP section 1). A daily git-only watch says when.
+- Upstream llama.cpp moves several times a day. Until 10/11/2026 we rebased weekly, or at once when upstream touched
+  what Marian runs, and re-proved exactness every time (ROADMAP section 1). The fifth rebase was exact and failed its
+  speed rule, so the fork stays at `6cb3e672e` (JOURNEY section 6e). Upstream's newer cache policy (ClassLRU) and its
+  CPU-computed misses are therefore not in this build.
 - Builds up to M1.2 carried no C++ exception unwinding (`/EHsc` was off). From M1.3 the build script turns it on
   ([docs/m1.3/tools/build_m13.bat](docs/m1.3/tools/build_m13.bat)): register test E57 built the same sources both ways
   and every answer was identical (tokens, log-probabilities and top-3, max difference 0, on every exactness arm).
@@ -553,6 +564,9 @@ instruction block after every start. The file must hold the exact text the reque
 template.
 
 ## Roadmap
+
+**As of 10/11/2026 the fork is in maintenance** (see the note at the top). The plan below is kept as it stood, for
+the record; none of its open items is scheduled.
 
 The living roadmap, with the evidence behind each item and the dev debt, is
 [docs/ROADMAP.md](docs/ROADMAP.md) (updated 27/10/2026 from scans of upstream llama.cpp and the wider ecosystem). In

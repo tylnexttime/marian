@@ -9,6 +9,12 @@ Every item names its class, as in the design: **E** exact (answers cannot change
 target model's choice, computed in a different batch shape), **A** answer-changing (opt-in only, behind a blind quality
 gate). Evidence marked *theirs* comes from another project's own machine and has not been reproduced here.
 
+**Status, 10/11/2026: maintenance.** The fifth rebase (register E82, section 1 below) was exact and failed its speed
+rule, and we decided the fork is not worth a weekly rebase any more. It stays pinned at `6cb3e672e`. The rest of this
+page is the plan as it stood on that day, kept for the record; none of its open items is scheduled. Our effort now
+goes into reports and small fixes for other projects that run large mixture-of-experts models, and into an upstream
+report if the measurement named in section 1 shows the extra cache misses on pure upstream.
+
 ## Where we stand
 
 - **Decode is solved on the reference laptop:** the P3 pinned tier meets the M1 exit, exactly (README, JOURNEY A21-A22).
@@ -84,6 +90,21 @@ before the build.
   0.388). The kv-rows path does not explain it (off changes nothing); the cause is upstream and not bisected. With
   every CUDA fusion off the cache is still identical to all-VRAM. A Gemma 4 MoE with KV-shared layers is unproven here:
   the pruning in `6cb3e672e` cannot fire on our file.
+- **The fifth rebase (10/11/2026, register E82): exact, slower, not landed.** 140 commits onto `0a94a3f28`. Upstream
+  rewrote the cache under our patches: ClassLRU replaced SLRU (#31233), and misses can be computed on the CPU
+  (#30966), which changes the slot map ("not cached" is now any slot `>= n_slots`, not a negative one). The nine
+  patches were ported, an independent read found no defect that changes an uploaded byte or a slot read, and tests
+  passed (17/17, trace-id 1/1, Python 184). Gemma 4 26B-A4B and Groot 19B-A3B: every cache, tier and ring arm
+  identical to all-VRAM, both contrasts differing, and all-VRAM answers unchanged between the two builds. Speed,
+  Swift, old build against new, twelve interleaved runs, limit 0.90 written before the run: **0.892 warm** (every new
+  run below every old run, six against six) and 0.914 after 16K. Every trace of the new build fills 183,948 experts
+  against 167,003 to 167,022 on the old: **10.1% more misses, 22.7 GiB more uploaded per run**, at the same
+  `--moe-cache-mib`. The registered branch for "exact but slower" is not pushed and no rerun, and it was taken: the
+  port branch is not published and master stays on `6cb3e672e`. **Not yet measured:** whether pure upstream shows the
+  same extra misses against its own commit before #31233. If it does, that is an upstream report with numbers; if it
+  does not, the cause is how our slot floor sizes the new bank layout.
+- **The rule after 10/11/2026:** no scheduled rebases. The daily watch still reads upstream; a rebase happens only if
+  a measurement gives a reason for one.
 
 ### 2. Prefill track (the main target)
 

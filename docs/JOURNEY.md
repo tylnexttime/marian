@@ -576,7 +576,74 @@ decode this laptop runs at about half its fresh speed within 3-4 minutes, which 
 drift and of debt row 17's 2x slumps. Chris's reading: the laptop had been quiet, so instead of spinning its fans up
 it throttles itself. The next test of row 17 forces the fans and logs power and clocks during the run.
 
+## 6e. Tuesday 10/11/2026: the fifth rebase is exact and slower, and the fork goes to maintenance
+
+One registered test (E82), written into the register after the port was written and before any build or run.
+
+**1. What upstream changed.** The daily watch had been asking for a rebase since 5/11: 140 commits since
+`6cb3e672e` by the time of the port (43 of the 138 the watch counted that morning touch what Marian runs), and the
+patch stack no longer applied. This time upstream had
+rewritten the expert cache itself. ClassLRU replaced SLRU (#31233), and a miss can now be computed on the CPU instead
+of uploaded (#30966), which changes the slot map: "not cached" is no longer a negative slot but any slot at or above
+`n_slots`. So this was a port, not a cherry-pick. An independent read of the ported branch against upstream, given
+the code and not our notes, found nothing that changes an uploaded byte, a target slot or a slot read, and four low
+findings that go to the dev-debt table.
+
+**2. The rule, written first.** Pass needed all of: tests green; every cache, tier and ring arm identical to all-VRAM
+on Gemma 4 26B-A4B and on Groot 19B-A3B, with the stock contrast still differing; every tier and ring arm's log
+showing the P3 source really active (an arm that silently ran upstream's uploads under our label would be void); and
+on Swift, the median of all runs of the new build at **0.90 or more** of the old build's, on warm decode and after a
+16K prompt. The branch for "exact but slower" was written too: not pushed, no rerun to see if it passes.
+
+**3. Exactness held.** Every arm identical to all-VRAM on both models: 10/10 records, 1,280 tokens, maximum
+difference 0. Both contrasts differ (0.590 and 0.658). All seven tier and ring arms had the source active. And the
+all-VRAM answers did not move between the two builds on either model, which we had predicted they would (50% and
+65%): 140 upstream commits, a kernel layout change among them, left both models bit-for-bit where they were.
+
+**4. Speed did not.** Eight runs first, then the four extra runs the registration allowed, twelve in all, alternating
+builds. Warm decode: median 6.397 tok/s old, 5.706 new, **0.892**. After a 16K prompt: 5.429 old, 4.960 new, 0.914.
+The warm result is the solid one: every new run (5.47 to 5.89) is below every old run (6.15 to 6.80), six against
+six, with no overlap. The full table is A50 in the appendix.
+
+**5. The clause that failed changed between eight runs and twelve; the verdict did not.** At eight runs, warm passed
+at 0.909 and post-16K failed at 0.829. At twelve, warm failed at 0.892 and post-16K passed at 0.914. Post-16K on the
+old build is two-valued (about 6.0 in three runs, 4.1 to 4.9 in three), so its ratio depends on how many slow runs
+land in the set and is not evidence either way. We say this plainly because the failure is by 0.008 on a limit that
+is arbitrary in its second decimal, and a reader should know how close it was and which half of it to trust.
+
+**6. The cause is in every trace, and it does not depend on the machine's mood.** Over the same 123,904 steps, the
+new build fills **183,948** experts, the same count in all six of its runs, against 167,003 to 167,022 on the old:
+**10.1% more misses and 22.7 GiB more uploaded per run**, with the same model, the same arguments, the same cache
+size in MiB and the same answers. Either ClassLRU keeps a worse resident set than SLRU on this workload, or the new
+bank layout (extra slots per bank for the CPU-computed path) leaves fewer usable slots inside the same budget. The
+traces cannot tell these apart.
+
+**7. The decision.** The registered branch was taken: the port is not published and master stays on `6cb3e672e`.
+Then a larger question, asked by Chris the same afternoon: is the fork still worth the time? The answer we gave was
+no, not at this intensity. Upstream's own cache keeps moving under the patches, each rebase now costs a day of
+re-proving, and this one bought an exact build that is about 11% slower on warm decode. So **the fork is in maintenance**: pinned,
+building, tests passing, no weekly rebase. The time goes instead to things that outlive our schedule: reports and
+small fixes sent to other projects that run large mixture-of-experts models, and device measurements from this
+laptop contributed to their tables.
+
+**8. What we could not see, and the one test still owed.** Which of ClassLRU and the bank layout costs the misses;
+whether a smaller model than Swift shows it; anything on another machine. The measurement that would settle the
+first: pure upstream at `0a94a3f28` against pure upstream at the commit before #31233, same model and
+`--moe-cache-mib`, counting uploads with upstream's own trace. If upstream alone shows the extra misses, it is
+theirs and goes to them as an issue with the numbers. If it does not, the cause is how our slot floor sizes the new
+layout. It is not registered or run yet. Until it is, "upstream regressed" is a guess and we are not making it.
+
+**9. Disturbances, named.** Two of the new-build runs overlapped a call on the laptop; two background jobs wrote
+small files during the first two pairs; within the first eight runs the machine's CPU benchmark was low for five
+and recovered for the other three (the alternating order puts both builds on both sides of that step); one old-build run
+had a file-sync client at 7% of the machine. No run was dropped. The busy core clock stayed within 465 to 495 MHz
+in every run, inside the rule's 300 MHz band, so nothing voided the clause.
+
 ## 7. What is next
+
+**As of 10/11/2026:** the fork is in maintenance (section 6e) and none of the open items below is scheduled. What
+is still owed is small: the upstream measurement in section 6e point 8, and keeping the pinned build and the Python
+suite green. The list below is kept as it stood.
 
 The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 
@@ -675,6 +742,9 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 | 30/10 | three wrong KV predictions (`-nkvo` would change answers; Nanbeige would gain from `-nkvo`; q4_0 KV would win on short prompts) | each recorded as wrong in its entry; the gain was at depth, and quality was checked by KL divergence |
 | 30/10 | a fit check judged by `nvidia-smi`, which saturates when Windows spills VRAM | void, rebuilt on llama.cpp's own memory breakdown |
 | 30/10 | a register header written with an estimated time, twice | caught by the clock read after writing; corrected in the entries |
+| 10/11 | predictions for E82: speed would pass (70%); all-VRAM answers would move between builds (Gemma 50%, Groot 65%) | all three wrong: speed failed at 0.892, and neither model's answers moved; recorded in the entry |
+| 10/11 | at eight runs the failing clause was post-16K (0.829); at twelve it was warm (0.892) | judged on all twelve as registered; the flip is stated in section 6e so the earlier number is not read as the finding |
+| 10/11 | rejected: publish the exact-but-slower port anyway; rerun until the 0.90 limit passes; call the extra misses an upstream regression without measuring upstream alone | the branch written before the run was taken; the upstream comparison is named as owed, not assumed |
 
 ---
 
@@ -1818,3 +1888,52 @@ MHz gave 6.8 tok/s, where 1,100 MHz gave about 12 on 29/10. The caveat is real: 
 1.07 is what is left after contention, and it costs about 3x the power. Why the two days differ is still open (row 17). The
 host side's time per token is next, and the first thing to check there is a file-sync client that sat at about 0.9 of a
 core through every run, noticed in the logger and unregistered.
+
+### 10/11/2026
+
+#### A50. E82: the fifth rebase, exact and slower
+
+Conditions: upstream `0a94a3f28` (140 commits after `6cb3e672e`), the nine patches ported onto upstream's rewritten
+cache (ClassLRU, CPU-computed misses). Exactness on Gemma 4 26B-A4B and Groot 19B-A3B, one run each arm. Speed on
+Swift, old build against new in the same session, runs alternated (old-new, new-old), eight runs and then the four
+extra runs the registration allowed. Limit: new/old median at least 0.90 on both columns, written before any run.
+
+| Check | Result |
+|---|---|
+| Unit tests | Python 184, trace-id test 1/1, `ctest -L main` 17/17 |
+| Independent read of the port | nothing that changes an uploaded byte, a target slot or a slot read; four low findings |
+| Gemma: cache, tier, tier + P3 prefill, ring, ring + P3 prefill against all-VRAM | 10/10 identical each, 1,280 tokens, max difference 0; contrast 0/10, 0.590 |
+| Groot: cache at 2,500 and 5,000 MiB, tier, ring, ring + P3 prefill against all-VRAM | 10/10 identical each, 1,280 tokens, max difference 0; contrast 0/10, 0.658 |
+| P3 source active in every tier and ring arm | 7 of 7 |
+| All-VRAM, old build against new | identical on both models, max difference 0 |
+| CPU share 0.5 (upstream's new option), reported | differs from all-VRAM on 10/10 records (max 0.729); 26.7 tok/s against 40.1, one run each |
+
+| Run | Warm tok/s | After 16K tok/s | Expert fills | GiB uploaded | Host s |
+|---|---|---|---|---|---|
+| r1-old | 6.19 | 6.02 | 167,003 | 223.4 | 353.3 |
+| r1-new | 5.88 | 5.03 | 183,948 | 246.1 | 365.6 |
+| r2-new | 5.74 | 4.23 | 183,948 | 246.1 | 374.5 |
+| r2-old | 6.80 | 4.91 | 167,005 | 223.4 | 319.7 |
+| r3-old | 6.40 | 5.95 | 167,012 | 223.4 | 326.6 |
+| r3-new | 5.89 | 4.88 | 183,948 | 246.1 | 356.1 |
+| r4-new | 5.47 | 5.00 | 183,948 | 246.1 | 391.0 |
+| r4-old | 6.39 | 5.97 | 167,022 | 223.4 | 340.5 |
+| r5-old | 6.55 | 4.85 | 167,022 | not recorded here | 332.1 |
+| r5-new | 5.67 | 4.92 | 183,948 | not recorded here | 378.9 |
+| r6-new | 5.51 | 5.09 | 183,948 | not recorded here | 374.3 |
+| r6-old | 6.15 | 4.10 | 167,005 | not recorded here | 353.0 |
+
+| Median of | Warm old | Warm new | Ratio | After 16K old | After 16K new | Ratio |
+|---|---|---|---|---|---|---|
+| first eight runs | 6.397 | 5.812 | 0.909 | 5.958 | 4.941 | **0.829** |
+| all twelve (the registered judgement) | 6.397 | 5.706 | **0.892** | 5.429 | 4.960 | 0.914 |
+
+Records were identical across all twelve runs (10/10, 2,189 tokens). Prefill was level at eight runs (0.945 at 4K,
+1.016 at 16K, reported, not judged).
+
+Taught us: an exact port can still lose, and the trace said why before the stopwatch could be argued with: the same
+fill count in every run of a build is a property of the code, not of the afternoon. Also: a limit of 0.90 failed by
+0.008, on one clause at eight runs and the other at twelve. What made the verdict worth keeping was that the rule and
+its branch were written before the run, and that the cause was countable. And the measurement that would say whose
+misses these are (pure upstream before and after its cache rewrite) was not run, so that question stays open here
+rather than being answered by assumption.
