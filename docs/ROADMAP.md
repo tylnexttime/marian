@@ -12,8 +12,9 @@ gate). Evidence marked *theirs* comes from another project's own machine and has
 **Status, 10/11/2026: maintenance.** The fifth rebase (register E82, section 1 below) was exact and failed its speed
 rule, and we decided the fork is not worth a weekly rebase any more. It stays pinned at `6cb3e672e`. The rest of this
 page is the plan as it stood on that day, kept for the record; none of its open items is scheduled. Our effort now
-goes into reports and small fixes for other projects that run large mixture-of-experts models, and into an upstream
-report if the measurement named in section 1 shows the extra cache misses on pure upstream.
+goes into reports and small fixes for other projects that run large mixture-of-experts models. The measurement named
+in section 1 was run on 11/11/2026 (E83): pure upstream shows the extra misses, all from ClassLRU (JOURNEY section 6e
+point 10). It was not filed upstream, because llama.cpp does not accept AI-written bug reports.
 
 ## Where we stand
 
@@ -100,9 +101,9 @@ before the build.
   run below every old run, six against six) and 0.914 after 16K. Every trace of the new build fills 183,948 experts
   against 167,003 to 167,022 on the old: **10.1% more misses, 22.7 GiB more uploaded per run**, at the same
   `--moe-cache-mib`. The registered branch for "exact but slower" is not pushed and no rerun, and it was taken: the
-  port branch is not published and master stays on `6cb3e672e`. **Not yet measured:** whether pure upstream shows the
-  same extra misses against its own commit before #31233. If it does, that is an upstream report with numbers; if it
-  does not, the cause is how our slot floor sizes the new bank layout.
+  port branch is not published and master stays on `6cb3e672e`. **Measured 11/11/2026 (E83):** pure upstream shows
+  the same extra misses against its own commit before #31233 (1.1009, all at ClassLRU, none from the bank layout),
+  so the cause is upstream's policy on this workload, not our slot floor. Table A51 in the journey.
 - **The rule after 10/11/2026:** no scheduled rebases. The daily watch still reads upstream; a rebase happens only if
   a measurement gives a reason for one.
 

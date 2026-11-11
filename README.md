@@ -15,7 +15,10 @@ ClassLRU), was built and tested. It was **exact**: every cache, tier and ring ar
 models. It was also **slower**: warm decode at **0.892** of the pinned build over twelve interleaved runs (0.914
 after a 16K prompt), against a limit of 0.90 written down before the first run, with 10.1% more cache misses in every
 trace. By that rule it did not land. The numbers, the rule, and what is still unmeasured are in
-[JOURNEY section 6e](docs/JOURNEY.md#6e-tuesday-10112026-the-fifth-rebase-is-exact-and-slower-and-the-fork-goes-to-maintenance). Everything below describes the pinned build, which still builds and passes its tests; the
+[JOURNEY section 6e](docs/JOURNEY.md#6e-tuesday-10112026-the-fifth-rebase-is-exact-and-slower-and-the-fork-goes-to-maintenance).
+The next day (11/11/2026) pure upstream, with no Marian patch, showed the same thing: **10.09% more misses** from the
+commit before ClassLRU (#31233) to `0a94a3f28`, all of it at ClassLRU, none from the bank layout (#30966), on this one
+model and cache size (section 6e point 10, table A51). It says nothing about upstream's speed. Everything below describes the pinned build, which still builds and passes its tests; the
 M0 measuring tool does not depend on the fork.
 
 ## What it does

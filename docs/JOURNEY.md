@@ -639,11 +639,38 @@ and recovered for the other three (the alternating order puts both builds on bot
 had a file-sync client at 7% of the machine. No run was dropped. The busy core clock stayed within 465 to 495 MHz
 in every run, inside the rule's 300 MHz band, so nothing voided the clause.
 
+**10. The owed test, run the next day (E83, Wednesday 11/11/2026): the extra misses are upstream's, and they come
+from ClassLRU.** Registered the evening before, before any build: five builds of pure upstream llama.cpp, no Marian
+patch in any of them, at the last commit with SLRU (`3ed7284f2`), at ClassLRU (#31233, `c4fb57969`), either side of
+the bank layout (#30966, `f7591a6a0` and `e95426f16`), and at `0a94a3f28`. Same Swift model, same arguments, same
+requests as E82, counted with upstream's own exit line. Rule: if `0a94a3f28` misses 5% or more above the SLRU build,
+the misses are upstream's; under 2%, they are ours; in between, no decision. A smaller cache had to miss more (or the
+counter is not measuring), each build's second run had to agree within 0.1%, and a pair counted only if both builds
+looked up the same number of experts.
+
+The result is as clean as a count gets. SLRU: 167,918 misses. Every build from ClassLRU on: 184,842 to 184,855.
+**Ratio 1.1009**, all of it at the ClassLRU commit; the bank layout adds nothing (1.0000). The smaller cache missed
+more (235,464), the repeats agreed (0.010% and 0.000%), and every build looked up the same 1,285,572 to 1,285,578
+experts and wrote the same answers. All of the increase is in decode batches (8 tokens or fewer): 143,912 to 160,919
+misses, hit rate 88.48% to 87.12%, 23 GiB more uploaded per run. Prefill is flat. The cache is 14.2 tokens' worth
+of experts by upstream's own count, far above the 1.0 to 1.2 tokens where #31233 says it can trail SLRU. And pure
+upstream's 10.09% is the 10.1% our traces showed in E82: our port did not cause the misses. The table is A51.
+
+Two things this does not say. It does not say ClassLRU is slower: these runs were not built to time anything, and
+the two SLRU runs alone gave 3.56 and 4.46 tok/s. And it is one model, one cache size and one request sequence. The
+author of #31233 measured fewer uploads and faster decode on other models and workloads, and has said a policy's
+result may differ between models and between uses of the same model. This is one such difference, counted.
+
+The branch we had written for this outcome was an issue on llama.cpp with the numbers. We did not file it. When we
+went to write it, llama.cpp's contributing guide turned out to forbid AI-written posts, bug reports included, and asks
+autonomous agents not to contribute at all. We had not read that before registering the branch. Their project, their
+rule: the numbers are here, and in the register, for anyone who wants to take them there in their own words.
+
 ## 7. What is next
 
-**As of 10/11/2026:** the fork is in maintenance (section 6e) and none of the open items below is scheduled. What
-is still owed is small: the upstream measurement in section 6e point 8, and keeping the pinned build and the Python
-suite green. The list below is kept as it stood.
+**As of 11/11/2026:** the fork is in maintenance (section 6e) and none of the open items below is scheduled. The
+upstream measurement owed in section 6e point 8 was run (point 10). What is left is keeping the pinned build and
+the Python suite green. The list below is kept as it stood.
 
 The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 
@@ -745,6 +772,9 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 | 10/11 | predictions for E82: speed would pass (70%); all-VRAM answers would move between builds (Gemma 50%, Groot 65%) | all three wrong: speed failed at 0.892, and neither model's answers moved; recorded in the entry |
 | 10/11 | at eight runs the failing clause was post-16K (0.829); at twelve it was warm (0.892) | judged on all twelve as registered; the flip is stated in section 6e so the earlier number is not read as the finding |
 | 10/11 | rejected: publish the exact-but-slower port anyway; rerun until the 0.90 limit passes; call the extra misses an upstream regression without measuring upstream alone | the branch written before the run was taken; the upstream comparison is named as owed, not assumed |
+| 11/11 | E83's first chain recorded no counts: the server's clean stop was proven in the foreground, but the chain ran as a background job, whose children ignore Ctrl+C, so every server was force-killed before printing | stopped after four runs, no count ever printed; cause shown on the CPU, one-line fix, re-proven from a background launch, all eight runs redone |
+| 11/11 | E83's branch said "file an issue on llama.cpp"; their contributing guide forbids AI-written bug reports, and we registered the branch without reading it | not filed; the numbers are published here instead |
+| 11/11 | prediction for E83: the bank layout would cost misses (35%) | wrong: 1.0000; all of it was ClassLRU (predicted 55%) |
 
 ---
 
@@ -1937,3 +1967,34 @@ fill count in every run of a build is a property of the code, not of the afterno
 its branch were written before the run, and that the cause was countable. And the measurement that would say whose
 misses these are (pure upstream before and after its cache rewrite) was not run, so that question stays open here
 rather than being answered by assumption.
+
+### 11/11/2026
+
+#### A51. E83: pure upstream across its cache rewrite
+
+Conditions: pure upstream llama.cpp, no Marian patch, five builds (CUDA, sm_89, `llama-server` only). Swift 1.5
+IQ2_XS (48 layers, 512 experts, 10 used), `-c 20480 -ngl 99 -fa on -t 16 --parallel 1 -ncmoe 48 --moe-cache-mib 9400
+-ub 512 -b 2048`, the M1.0 request set (`docs/m1.0/prompts.json`: a warm-up, 10 decode prompts x 256 tokens, a 5,313-
+and a 19,361-token prompt, 3 decode prompts after; greedy, `top_k 1`, seed 42, no prompt cache). Counted from
+upstream's exit line, printed when the server stops cleanly on Ctrl+C. One run a build, A and C twice, then A at a
+smaller cache as the control. Rule written the evening before. Cache: 9,398 MiB for 33,812 MiB of host experts,
+27.8% of slots, 14.2 tokens' worth.
+
+| Run | Commit | Misses, ubatch <= 8 | Misses, ubatch > 8 | Misses, total | Lookups | Ratio to A |
+|---|---|---|---|---|---|---|
+| A | `3ed7284f2` (before #31233, SLRU) | 143,912 | 24,006 | 167,918 | 1,285,576 | 1 |
+| B | `c4fb57969` (#31233, ClassLRU) | 160,919 | 23,936 | 184,855 | 1,285,574 | 1.1009 |
+| D | `f7591a6a0` (before #30966) | 160,910 | 23,936 | 184,846 | 1,285,574 | 1.1008 |
+| E | `e95426f16` (#30966, bank layout) | 160,915 | 23,927 | 184,842 | 1,285,572 | 1.1008 |
+| C | `0a94a3f28` | 160,929 | 23,925 | 184,854 | 1,285,578 | **1.1009** |
+| A, second run | `3ed7284f2` | 143,936 | 23,999 | 167,935 | 1,285,572 | 1.0001 |
+| C, second run | `0a94a3f28` | 160,929 | 23,925 | 184,854 | 1,285,578 | 1.1009 |
+| A at 7,000 MiB (control) | `3ed7284f2` | 207,722 | 27,742 | 235,464 | 1,285,574 | 1.4023 |
+
+Decode hit rate 88.48% (SLRU) against 87.12% (every ClassLRU build); uploaded in decode 196.9 against 220.3 GiB.
+E/D = 1.0000. Decode and post answers identical in every 9,400 MiB run. Speed was recorded and not judged (3.56 to
+4.58 tok/s at a busy core clock of 465 to 555 MHz; the two A runs alone gave 3.56 and 4.46). The first chain of
+this test is void and not in the table: no server printed its counts (section 8).
+
+Taught us: the counter answered the question the stopwatch could not, in one run a build. And read the receiving
+project's rules before you write a branch that ends in their tracker.
