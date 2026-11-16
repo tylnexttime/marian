@@ -106,10 +106,12 @@ before the build.
   so the cause is upstream's policy on this workload, not our slot floor. Table A51 in the journey.
 - **llama.cpp 1.0 (16/11/2026, register E85): the stack applies cleanly, and the policy is unchanged.** v1.0.0's
   expert-cache source is byte-identical to `0a94a3f28`. The nine commits cherry-pick with no conflict onto v1.0.0
-  and onto master, and they build. **E86 (17/11) ran E82's rule on 1.0, and the port does not land:** 1.0 changed
-  upstream's own numerics (its all-VRAM answers differ from the old build's), so the old-vs-new answers clause cannot
-  pass; over three pairs, decode was 0.909 warm and 0.857 after 16K, like E82. Marian's arms stayed identical to the
-  same base's stock path. The next rebase test gates on the same base's stock and all-VRAM arms instead (journey
+  and onto master, and they build. **E86 (17/11) ran E82's rule on 1.0, and the port does not land:** on Groot the
+  expert-cache, tier and ring arms each differ from all-VRAM (Gemma's are identical), and decode after 16K was 0.857
+  of the old build over three pairs, which cannot reach 0.90 even with ten runs (warm 0.909). 1.0 also changed
+  upstream's own answers against the old build; that is reported, not gated. (Corrected 17/11: the first text said
+  this made the rule impossible to pass; the rule's answers clause is within one build, and it held.) No pure 1.0
+  build has been run yet, so whether the Groot mismatch is upstream's or the port's is the next test (journey
   section 6e point 12, table A53). Without the fork, 1.0 offers M0 two new calibration axes, both class A: FP8 KV
   (`-ctk/-ctv f8_e4m3`) and `--moe-cache-cpu-share`; the latter was slower on a model that fits in VRAM, so it is
   for the 8 GB case only.

@@ -20,9 +20,11 @@ The next day (11/11/2026) pure upstream, with no Marian patch, showed the same t
 commit before ClassLRU (#31233) to `0a94a3f28`, all of it at ClassLRU, none from the bank layout (#30966), on this one
 model and cache size (section 6e point 10, table A51). It says nothing about upstream's speed.
 **llama.cpp 1.0 (tagged 13/11/2026) keeps that policy byte for byte.** Our nine commits apply to it cleanly and
-build. Measured on 17/11/2026, the port does not land: 1.0 changes upstream's own answers against the old build, so
-our rule's old-vs-new check cannot pass, and decode was 0.909 warm and 0.857 after 16K over three pairs. The pin
-stays (section 6e points 11 and 12, tables A52 and A53). Everything below describes the pinned build, which still builds and passes its tests; the
+build. Measured on 17/11/2026, the port does not land: on Groot our expert-cache arms do not match the all-VRAM
+reference, and decode after 16K was 0.857 of the old build over three pairs, which cannot reach the rule's 0.90 even
+with ten runs (warm: 0.909). Corrected the same morning: we first wrote that 1.0's changed answers made our rule
+impossible to pass, but the rule compares answers within each build, and that held. Whether the Groot mismatch is
+upstream's or the port's is the next test. The pin stays (section 6e points 11 and 12, tables A52 and A53). Everything below describes the pinned build, which still builds and passes its tests; the
 M0 measuring tool does not depend on the fork.
 
 ## What it does

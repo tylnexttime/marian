@@ -729,6 +729,18 @@ without gating on them. That is a new rule, written before its run; E86 is not r
 Decision: the 1.0 port does not land. Maintenance at `6cb3e672e` stands, and the port stays unpublished. No further
 night is spent completing E86. Table A53.
 
+**Correction, the same morning (17/11/2026, after an independent critique by five reviewers from two model
+families).** Two things above are wrong. First, E82's rule does not ask for identical answers across the old and new
+builds: it asks for identical answers across every run of one build, and treats old against new as reported. E86 met
+that clause. So "the rule cannot pass on 1.0" was our misreading, carried by a scorer that checked across builds.
+Second, the Groot clause did not merely go unfinished: every Groot arm that ran (expert cache twice, tier, ring)
+differs from all-VRAM, and the rule needs each identical, so that clause fails. The speed clause cannot pass either:
+after 16K the best possible ratio is 0.865 with eight runs and 0.873 with ten. By the rule as written, E86 is a
+FAIL, and the decision stands for those reasons. Also corrected: "1.0's own expert-cache path" meant our 1.0 build
+with only upstream's cache flags; no pure 1.0 build was run, so whether the Groot mismatch is upstream's or ours is
+open, and that is the next test, registered before its run. "No further night" is withdrawn. The CPU-share result
+above is one run per arm.
+
 ## 7. What is next
 
 **As of 11/11/2026:** the fork is in maintenance (section 6e) and none of the open items below is scheduled. The
@@ -843,6 +855,7 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 | 16/11 | E86 started beside another workload's database server, with a guard sampling every 2 s | the first 12.7 GB load trimmed 2.1 GB of the database's working set before the guard killed it; stopped, no further loads, the other workload told; the guard can only stop the second load, so a load larger than available memory waits for a quiet machine |
 | 16/11 | prediction for E86: exact (90%), assuming 1.0 kept `0a94a3f28`'s numerics | half wrong: Marian matched the same base's stock path, but 1.0 itself changed answers against the old build and, on Groot, its cache path against all-VRAM; the old-vs-new records clause could not pass (section 6e point 12) |
 | 17/11 | E82's rule gates on identical answers across old and new builds | on a base that changes numerics this measures upstream, not Marian; the next rebase test gates on the same base's stock and all-VRAM arms and reports old-vs-new (written before its run; E86 not rescored) |
+| 17/11 | the row above, and E86's "cannot pass on 1.0": we read E82's answers clause as old-against-new | wrong: the clause is within one build, and E86 met it; the copied scorer was stricter than the rule. Found by critique the same morning; E86 is a FAIL on the Groot and post-16K clauses instead, and the public text was corrected the same day (section 6e point 12) |
 
 ---
 
@@ -2096,7 +2109,8 @@ Speed (Swift T8, `-ncmoe 48 --moe-cache-mib 9400 --moe-miss-source tier --moe-ti
 | r3-new | 5.88 | 5.04 | 24.2 | 26.2 | 480 |
 | **Median new/old** | **0.909** | **0.857** | | | not void |
 
-r4 was cut by the window: verdict INCOMPLETE. Answers: new runs identical to each other, old runs to each other;
+r4 was cut by the window: verdict INCOMPLETE, and after 16K it cannot reach 0.90 with eight or ten runs (corrected
+17/11; by the rule as written E86 is a FAIL, see section 6e point 12). Answers: new runs identical to each other, old runs to each other;
 new against old 1 of 10 texts identical (max |d logprob| 0.343).
 
 Exactness on the 1.0 build:
