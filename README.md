@@ -18,7 +18,9 @@ trace. By that rule it did not land. The numbers, the rule, and what is still un
 [JOURNEY section 6e](docs/JOURNEY.md#6e-tuesday-10112026-the-fifth-rebase-is-exact-and-slower-and-the-fork-goes-to-maintenance).
 The next day (11/11/2026) pure upstream, with no Marian patch, showed the same thing: **10.09% more misses** from the
 commit before ClassLRU (#31233) to `0a94a3f28`, all of it at ClassLRU, none from the bank layout (#30966), on this one
-model and cache size (section 6e point 10, table A51). It says nothing about upstream's speed. Everything below describes the pinned build, which still builds and passes its tests; the
+model and cache size (section 6e point 10, table A51). It says nothing about upstream's speed.
+**llama.cpp 1.0 (tagged 13/11/2026) keeps that policy byte for byte.** Our nine commits apply to it cleanly and
+build, but whether the port is fast enough is not measured yet, so the pin stays (section 6e point 11, table A52). Everything below describes the pinned build, which still builds and passes its tests; the
 M0 measuring tool does not depend on the fork.
 
 ## What it does

@@ -666,6 +666,39 @@ went to write it, llama.cpp's contributing guide turned out to forbid AI-written
 autonomous agents not to contribute at all. We had not read that before registering the branch. Their project, their
 rule: the numbers are here, and in the register, for anyone who wants to take them there in their own words.
 
+**11. llama.cpp 1.0 (Monday 16/11/2026): the stack applies cleanly, and the policy is the same code.** Upstream
+tagged v1.0.0 on 13/11/2026 (`a6d1a74db`, on `b1b770d90`), 124 commits after `0a94a3f28`. It is mostly an API and
+stability milestone: 35 deprecated functions and `--defrag-thold` removed, the NextN/speculative API promoted into
+`llama.h`, FP8 KV caches, `moe_cache_size` and `moe_cache_cpu_share` in the public context parameters, and server
+hardening. Every expert-cache item in its notes was already in `0a94a3f28`. Register E85 asked three questions,
+without a GPU or a model:
+
+- **Did the policy change?** No. `src/llama-moe-cache.{cpp,h}` are byte-identical between `0a94a3f28` and v1.0.0.
+  On master after the tag (`9fba51d2c`, 16/11) there are two changes: #32157 moves the graph building of the lookup
+  into the cache file, and #31775 changes one comment. Nothing touches admission or eviction, so E83's 10.09% extra
+  misses carry over to 1.0 because the code is the same.
+- **Does the stack apply?** Yes. All nine commits of the port cherry-pick with no conflict onto v1.0.0 and onto
+  master, despite the API prune and #32157's move. We had predicted conflicts (10% for clean).
+- **Does it build?** Yes, CPU-only, and its trace-id unit test passes on both. That day the CUDA build of the v1.0.0
+  port also built (195 of 195 targets) and `ctest -L main` passed.
+
+The speed question (E86, E82's rule unchanged on v1.0.0) has **no answer yet**. It started on a laptop that was also
+serving another workload's database. The first model load (12.7 GB) took available memory from 5.6 GB to 31 MB and
+pushed 2.1 GB of the database server's working set out to the page file for about 15 seconds, until a memory guard
+we had added for that run killed the load. Nothing is concluded from it. The test waits for a window with the
+database idle. The guard worked, but too late to stop the first load: three two-second samples are slower than a
+12.7 GB read.
+
+What 1.0 offers without the fork, unmeasured here: FP8 KV (lossy, so class A in our terms) frees VRAM for the expert
+cache; upstream's CPU share for misses (also class A, since it changes rounding); and CUDA work since our base
+(few-row MMQ for batches of 2 to 24, #31533; empty MoE tiles skipped, #32067; scheduler reuse, #32009 and #32089).
+These are calibration axes for M0 against stock llama.cpp. Upstream's `LLAMA_MOE_CACHE_TRACE` (format MCT1) now
+records the selected experts per layer step, much as our P1 trace does. If `marian replay` can read it, three of
+the nine patches would no longer be needed. That is not checked.
+
+Decision: maintenance stands. The pin stays at `6cb3e672e`, and the 1.0 port is not published. It lands only if E86
+passes.
+
 ## 7. What is next
 
 **As of 11/11/2026:** the fork is in maintenance (section 6e) and none of the open items below is scheduled. The
@@ -775,6 +808,9 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 | 11/11 | E83's first chain recorded no counts: the server's clean stop was proven in the foreground, but the chain ran as a background job, whose children ignore Ctrl+C, so every server was force-killed before printing | stopped after four runs, no count ever printed; cause shown on the CPU, one-line fix, re-proven from a background launch, all eight runs redone |
 | 11/11 | E83's branch said "file an issue on llama.cpp"; their contributing guide forbids AI-written bug reports, and we registered the branch without reading it | not filed; the numbers are published here instead |
 | 11/11 | prediction for E83: the bank layout would cost misses (35%) | wrong: 1.0000; all of it was ClassLRU (predicted 55%) |
+| 16/11 | E86's first text quoted the speed bar as 0.97 on warm decode only; E82's bar is 0.90 on warm and post-16K | corrected before any build or run, with the correction stated in the entry |
+| 16/11 | prediction for E85: the port would need hand-resolved conflicts on 1.0 (90%) | wrong: all nine commits applied cleanly (predicted 10%) |
+| 16/11 | E86 started beside another workload's database server, with a guard sampling every 2 s | the first 12.7 GB load trimmed 2.1 GB of the database's working set before the guard killed it; stopped, no further loads, the other workload told; the guard can only stop the second load, so a load larger than available memory waits for a quiet machine |
 
 ---
 
@@ -1998,3 +2034,16 @@ this test is void and not in the table: no server printed its counts (section 8)
 
 Taught us: the counter answered the question the stopwatch could not, in one run a build. And read the receiving
 project's rules before you write a branch that ends in their tracker.
+
+### 16/11/2026
+
+#### A52. E85: the port onto llama.cpp 1.0, without a GPU
+
+| Base | Expert-cache source vs `0a94a3f28` | Nine commits | CPU build (MSVC, Release) | Trace-id test |
+|---|---|---|---|---|
+| v1.0.0 (`a6d1a74db`, on `b1b770d90`) | byte-identical | clean, no conflict | 144/144 targets | OK |
+| master `9fba51d2c` | #32157 (code move), #31775 (one comment) | clean, no conflict | 146/146 targets | OK |
+
+The only warnings were upstream pragma warnings in `ggml-cpu` (C4068), none in a Marian file. The same day the CUDA
+build of the v1.0.0 port built (195/195) and `ctest -L main` passed. E86, the exactness and speed test, has no
+result yet (section 6e point 11).

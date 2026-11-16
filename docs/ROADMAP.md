@@ -104,6 +104,11 @@ before the build.
   port branch is not published and master stays on `6cb3e672e`. **Measured 11/11/2026 (E83):** pure upstream shows
   the same extra misses against its own commit before #31233 (1.1009, all at ClassLRU, none from the bank layout),
   so the cause is upstream's policy on this workload, not our slot floor. Table A51 in the journey.
+- **llama.cpp 1.0 (16/11/2026, register E85): the stack applies cleanly, and the policy is unchanged.** v1.0.0's
+  expert-cache source is byte-identical to `0a94a3f28`. The nine commits cherry-pick with no conflict onto v1.0.0
+  and onto master, and they build. The speed test on 1.0 (E86, E82's rule) has no result yet: it was stopped at its
+  first load to protect another workload on the same laptop, and it waits for a quiet machine. Without the fork, 1.0
+  offers M0 two new calibration axes, both class A: FP8 KV (`-ctk/-ctv f8_e4m3`) and `--moe-cache-cpu-share`.
 - **The rule after 10/11/2026:** no scheduled rebases. The daily watch still reads upstream; a rebase happens only if
   a measurement gives a reason for one.
 
