@@ -106,9 +106,13 @@ before the build.
   so the cause is upstream's policy on this workload, not our slot floor. Table A51 in the journey.
 - **llama.cpp 1.0 (16/11/2026, register E85): the stack applies cleanly, and the policy is unchanged.** v1.0.0's
   expert-cache source is byte-identical to `0a94a3f28`. The nine commits cherry-pick with no conflict onto v1.0.0
-  and onto master, and they build. The speed test on 1.0 (E86, E82's rule) has no result yet: it was stopped at its
-  first load to protect another workload on the same laptop, and it waits for a quiet machine. Without the fork, 1.0
-  offers M0 two new calibration axes, both class A: FP8 KV (`-ctk/-ctv f8_e4m3`) and `--moe-cache-cpu-share`.
+  and onto master, and they build. **E86 (17/11) ran E82's rule on 1.0, and the port does not land:** 1.0 changed
+  upstream's own numerics (its all-VRAM answers differ from the old build's), so the old-vs-new answers clause cannot
+  pass; over three pairs, decode was 0.909 warm and 0.857 after 16K, like E82. Marian's arms stayed identical to the
+  same base's stock path. The next rebase test gates on the same base's stock and all-VRAM arms instead (journey
+  section 6e point 12, table A53). Without the fork, 1.0 offers M0 two new calibration axes, both class A: FP8 KV
+  (`-ctk/-ctv f8_e4m3`) and `--moe-cache-cpu-share`; the latter was slower on a model that fits in VRAM, so it is
+  for the 8 GB case only.
 - **The rule after 10/11/2026:** no scheduled rebases. The daily watch still reads upstream; a rebase happens only if
   a measurement gives a reason for one.
 

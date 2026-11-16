@@ -699,6 +699,36 @@ the nine patches would no longer be needed. That is not checked.
 Decision: maintenance stands. The pin stays at `6cb3e672e`, and the 1.0 port is not published. It lands only if E86
 passes.
 
+**12. E86 ran (Tuesday 17/11/2026, 04:12 to 07:20), and the rule cannot pass on 1.0.** The test ran overnight with
+the database server stopped, on the same laptop. The window was shorter than the protocol: three of the four
+old/new speed pairs fitted, and the Groot exactness arms were cut at the window's end. Before the run we changed the
+speed cut-off so that only whole pairs would start, and wrote down that the verdict could then only be INCOMPLETE.
+It was. But the result settles the question anyway:
+
+- **Upstream 1.0 changed its numerics.** The plain all-VRAM Gemma run, with no Marian code path active, gives the
+  same answers on the old build and on 1.0 for only 2 of 10 texts. On Swift, every 1.0 run matches every other 1.0
+  run, and every old-build run matches the other old-build runs, but the two builds differ (1 of 10 texts). E82's
+  rule asks for identical answers across both builds. That held on `0a94a3f28`; on 1.0 it cannot hold, whatever we
+  do. The cause is somewhere in the 124 upstream commits (CUDA kernel work is the likely place; not isolated).
+- **Marian's exactness held against the same base.** On Gemma, the tier, the ring and the prefill source are each
+  identical to all-VRAM on 1.0 (1,280 of 1,280 tokens), and the contrast arm differs, so the comparison can see a
+  difference. On Groot, our arms are identical to 1.0's own expert-cache path, but on 1.0 that stock path no longer
+  matches all-VRAM (it did on `0a94a3f28`). The arms that would locate this (KV-rows path off, fusion off) were
+  the ones cut.
+- **Speed looks like E82 again.** Three pairs, medians: warm decode new/old **0.909**, after 16K **0.857** (E82:
+  0.892 and 0.914). Same size of loss, as expected from an unchanged ClassLRU. Prefill about equal.
+- **Upstream's CPU share for misses** (`--moe-cache-cpu-share 0.5`) changed Gemma's answers, as a class A switch
+  should, and decoded at 29.6 against 36.2 tokens/s here, where the model fits in VRAM. That is not the case it is
+  meant for; it needs the 8 GB laptop.
+
+What we learned about our own rule: comparing old build with new can only pass when upstream keeps its numerics. On
+a base that changes them, that clause measures upstream, not Marian. The next rebase test will compare Marian's arms
+with the same base's stock and all-VRAM arms (as the Gemma clause already does) and report old-against-new answers
+without gating on them. That is a new rule, written before its run; E86 is not rescored.
+
+Decision: the 1.0 port does not land. Maintenance at `6cb3e672e` stands, and the port stays unpublished. No further
+night is spent completing E86. Table A53.
+
 ## 7. What is next
 
 **As of 11/11/2026:** the fork is in maintenance (section 6e) and none of the open items below is scheduled. The
@@ -811,6 +841,8 @@ The live list is [ROADMAP.md](ROADMAP.md). In short, as of 27/10:
 | 16/11 | E86's first text quoted the speed bar as 0.97 on warm decode only; E82's bar is 0.90 on warm and post-16K | corrected before any build or run, with the correction stated in the entry |
 | 16/11 | prediction for E85: the port would need hand-resolved conflicts on 1.0 (90%) | wrong: all nine commits applied cleanly (predicted 10%) |
 | 16/11 | E86 started beside another workload's database server, with a guard sampling every 2 s | the first 12.7 GB load trimmed 2.1 GB of the database's working set before the guard killed it; stopped, no further loads, the other workload told; the guard can only stop the second load, so a load larger than available memory waits for a quiet machine |
+| 16/11 | prediction for E86: exact (90%), assuming 1.0 kept `0a94a3f28`'s numerics | half wrong: Marian matched the same base's stock path, but 1.0 itself changed answers against the old build and, on Groot, its cache path against all-VRAM; the old-vs-new records clause could not pass (section 6e point 12) |
+| 17/11 | E82's rule gates on identical answers across old and new builds | on a base that changes numerics this measures upstream, not Marian; the next rebase test gates on the same base's stock and all-VRAM arms and reports old-vs-new (written before its run; E86 not rescored) |
 
 ---
 
@@ -2047,3 +2079,33 @@ project's rules before you write a branch that ends in their tracker.
 The only warnings were upstream pragma warnings in `ggml-cpu` (C4068), none in a Marian file. The same day the CUDA
 build of the v1.0.0 port built (195/195) and `ctest -L main` passed. E86, the exactness and speed test, has no
 result yet (section 6e point 11).
+
+### 17/11/2026
+
+#### A53. E86: the port on llama.cpp 1.0, E82's protocol in a shortened window
+
+Speed (Swift T8, `-ncmoe 48 --moe-cache-mib 9400 --moe-miss-source tier --moe-tier-mib 6144`), decode in tokens/s:
+
+| Run | Warm | After 16K | Prefill 4K | Prefill 16K | Median core MHz |
+|---|---|---|---|---|---|
+| r1-old | 6.46 | 5.88 | 24.1 | 26.1 | 480 |
+| r1-new | 5.52 | 4.25 | 24.9 | 27.9 | 495 |
+| r2-new | 5.50 | 5.08 | 27.2 | 27.9 | 480 |
+| r2-old | 6.07 | 5.82 | 27.0 | 27.0 | 480 |
+| r3-old | 5.79 | 5.96 | 24.9 | 26.6 | 480 |
+| r3-new | 5.88 | 5.04 | 24.2 | 26.2 | 480 |
+| **Median new/old** | **0.909** | **0.857** | | | not void |
+
+r4 was cut by the window: verdict INCOMPLETE. Answers: new runs identical to each other, old runs to each other;
+new against old 1 of 10 texts identical (max |d logprob| 0.343).
+
+Exactness on the 1.0 build:
+
+| Comparison | Texts identical | Result |
+|---|---|---|
+| Gemma: expert cache, tier, tier+prefill, ring, ring+prefill, second all-VRAM, each vs all-VRAM | 10/10 each (1,280 tokens) | identical |
+| Gemma contrast arm vs all-VRAM | 0/10 | differs (the comparison can see a difference) |
+| Gemma all-VRAM, old build vs 1.0 build | 2/10 (max 0.567) | differs: upstream numerics |
+| Groot: expert cache (two arms), tier, ring, each vs all-VRAM | 1/10 each (max 0.225) | differ, and identical to each other |
+| Groot: ring+prefill, contrast, second all-VRAM, old build | not run (cut) | |
+| Gemma with `--moe-cache-cpu-share 0.5` vs all-VRAM | 0/10 | differs (class A); 29.6 vs 36.2 tokens/s |
