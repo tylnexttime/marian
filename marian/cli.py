@@ -302,6 +302,9 @@ def _report_trade(out: Path) -> None:
         return
     for line in launch.trade_lines(doc, others):
         print(line)
+    rows = doc.get("rows", [])
+    if any(r.get("status") != "ok" for r in rows):
+        print(f"skipped: {launch.skipped_summary(rows)}")
 
 
 def _cache_opts(a) -> CacheOptions:

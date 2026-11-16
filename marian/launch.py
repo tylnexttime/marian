@@ -33,7 +33,7 @@ from pathlib import Path
 
 from . import machine, plan
 from .engines import DEFAULT_UBATCH, LlamaCpp, same_build
-from .profile import launch_env_problem, logical_batch, sha256_head, ubatch_report
+from .profile import launch_env_problem, logical_batch, sha256_head, skipped_rows, ubatch_report
 
 QUICK_CTXS = (4096, 8192, 16384, 32768, 65536, 131072, 262144)
 PROMPTY = re.compile(r'"(?:prompt|messages|content|input|text|system)"\s*:'
@@ -73,6 +73,21 @@ def ubatch_reason(model_name: str, ubatch: int, measured: list[int], engine_name
             + " or ".join(f"--ubatch {u}" for u in measured))
 
 
+def skipped_summary(rows: list[dict], show: int = 3) -> str:
+    """The rows that did not run, counted by status, with the first few notes: why a profile has nothing to plan from,
+    or what a calibration left out."""
+    skipped = skipped_rows(rows)
+    if not skipped:
+        return "every row ran"
+    counts: dict[str, int] = {}
+    for r in skipped:
+        counts[r["status"]] = counts.get(r["status"], 0) + 1
+    head = ", ".join(f"{n} {s}" for s, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+    notes = "; ".join(f"n_cpu_moe {r['n_cpu_moe']}: {r['note']}" if "n_cpu_moe" in r else str(r.get("note"))
+                      for r in skipped[:show] if r.get("note"))
+    return f"{len(skipped)} row(s) did not run ({head})" + (f" - {notes}" if notes else "")
+
+
 def explain(rows: list[dict], need: int, objective: str, model_name: str, *, free: int | None, margin: int,
             exact_only: bool, stock: bool, ram_free: int | None, ram_floor: int, ubatch: int = DEFAULT_UBATCH) -> str:
     """Why choose() found nothing, from the widest question to the narrowest."""
@@ -81,6 +96,9 @@ def explain(rows: list[dict], need: int, objective: str, model_name: str, *, fre
     if not any(plan.ubatch_of(r) == ubatch for r in rows):
         return ubatch_reason(model_name, ubatch, plan.ubatches(rows))
     rows = [r for r in rows if plan.ubatch_of(r) == ubatch]
+    if not any(r.get("status") == "ok" for r in rows):
+        return (f"the profile for {model_name} has no row that ran on this machine: "
+                f"{skipped_summary(rows)}. Free RAM or VRAM and calibrate again")
     if plan.choose(rows, need, objective, ubatch=ubatch) is None:
         return (f"no measured configuration fits {need} tokens on this machine for {model_name}; "
                 "run `marian profile` with a larger --ctx first")

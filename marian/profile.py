@@ -90,6 +90,14 @@ from .engines import DEFAULT_UBATCH, P3_MISS_SOURCES, RING_DEFAULT_MIB, Config, 
 PROFILE_SCHEMA = 3        # 3: the declared ubatch and P3 prefill rows; 2: cache arms (M1.3); 1: M0
 PAIR_NOISE = 0.10         # prefill_pair: a speed difference within 10% is a tie (one probe per arm)
 REPEATS_MAX = 3           # probes per row: 1 by default, up to 3 on request (Chris, 30/10/2026; debt row 23)
+# RAM-limited rows (17/11/2026): on a 32 GB laptop with about 15 GB available, the walk's first row (every expert on
+# the CPU, -lm none: the CPU share read fully into RAM) exhausted RAM at load (241 MiB left, then CUDA out of memory)
+# and, being first, ended the walk with no row at all. A walk row whose estimated RAM does not fit is now skipped
+# before it starts, and a row that starts and runs RAM out is recorded; neither ends the walk, because later rows put
+# more on the GPU and need less RAM. Only other failures (VRAM) end it.
+RAM_RESERVE_MIB = 1536    # a -lm none walk row starts only if its estimated RAM leaves at least this much available
+RAM_EXHAUSTED_MIB = 512   # a failed row whose available RAM fell below this ran out of RAM, not VRAM
+RAM_STATUSES = ("skipped_ram", "ram_exhausted")
 
 FILLER = ("The workshop opens at eight. Apprentices sign in, check the job board and collect their tools. "
           "Safety briefings come first, then practical tasks, then a short review before lunch. ")
@@ -393,6 +401,59 @@ def tier_ladder(ram_available_mib: int, floor_mib: int, useful_mib: int | None, 
     return fits[-steps:] if steps > 0 else []
 
 
+def host_ram_need_mib(s: dict, c: Config, geom: geometry.Geometry | None) -> int | None:
+    """RAM a walk row reads in at load, in MiB, or None when it cannot be estimated or need not be: with -lm none the
+    weights kept on the CPU are read fully into RAM (an mmap row's pages are file cache, which Windows can drop, so it
+    is not pre-checked). MoE: the expert bytes of the n_cpu_moe layers (from the geometry; without it the whole file's
+    share, an overestimate). Dense: the file's share of the layers not on the GPU (the output layer counted as one)."""
+    if c.load_mode != "none":
+        return None
+    n = s.get("block_count") or 0
+    size = s.get("bytes") or 0
+    if not n or not size:
+        return None
+    if s.get("moe") and c.n_cpu_moe is not None:
+        k = min(max(c.n_cpu_moe, 0), n)
+        total = getattr(geom, "total_expert_bytes", None) or size
+        return -(-total * k // n // 2**20)
+    if c.n_cpu_moe is None and c.n_gpu_layers is not None:
+        cpu_layers = max(0, n + 1 - min(c.n_gpu_layers, n + 1))
+        return -(-size * cpu_layers // (n + 1) // 2**20)
+    return None
+
+
+def ram_precheck(row: dict, need: int | None, available: int, reserve: int = RAM_RESERVE_MIB) -> bool:
+    """True if the row may start. If its estimated RAM would leave less than `reserve` MiB available, the row is
+    recorded as skipped_ram (nothing is started) and False is returned."""
+    if need is None:
+        return True
+    row["ram_need_mib"] = need
+    if need + reserve <= available:
+        return True
+    row.update(status="skipped_ram", ram_free_before_mib=available,
+               note=f"needs about {need} MiB of RAM with -lm none; {available} MiB available, {reserve} MiB kept free")
+    return False
+
+
+def ram_exhausted(row: dict, low_mib: int = RAM_EXHAUSTED_MIB) -> bool:
+    """A start or probe failure during which available RAM fell below low_mib is a RAM failure: relabel it
+    ram_exhausted (the original status kept in failed_as) and return True."""
+    low = row.get("ram_avail_low_mib")
+    if row.get("status") in ("start_failed", "probe_failed") and low is not None and low < low_mib:
+        row["failed_as"] = row["status"]
+        row["status"] = "ram_exhausted"
+        row["note"] = f"available RAM fell to {low} MiB ({row.get('note') or 'no note'})"
+        return True
+    return False
+
+
+def skipped_rows(rows: list[dict]) -> list[dict]:
+    """Every row that did not measure, with why: what the planner and the calibration summary report."""
+    keys = ("ctx", "kv", "arm", "n_cpu_moe", "n_gpu_layers", "load_mode", "moe_cache_mib", "miss_source")
+    return [dict({k: r.get(k) for k in keys if r.get(k) is not None}, status=r.get("status"), note=r.get("note"))
+            for r in rows if r.get("status") != "ok"]
+
+
 def model_geometry(model: Path) -> geometry.Geometry | None:
     """Expert geometry from the GGUF headers (every shard of a split model), or None if it cannot be read: then the
     floor comes from the server's own refusal and the top of the bracket from VRAM alone."""
@@ -479,7 +540,8 @@ def cache_arms(model: Path, engine, s: dict, geom, ctx: int, kv: str, threads: i
     n = s["block_count"] or 0
     summary: dict = {"ctx": ctx, "kv": kv}
     rows: list[dict] = []
-    base = next((r for r in walk_rows if r.get("n_cpu_moe") == n and r["status"] == "ok"), None)
+    base = next((r for r in walk_rows if r.get("n_cpu_moe") == n and r["status"] == "ok"
+                 and r.get("arm", "walk") in ("walk", "walk-mmap")), None)
     if base is None:
         summary["skipped"] = "the all-experts-on-CPU point did not run, so the VRAM left for a cache is unknown"
         return rows, summary
@@ -653,7 +715,7 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
     if why:
         raise ValueError(why)
     with_cache = bool(cache.enabled and s["moe"] and caps.get("marian"))
-    geom = model_geometry(model) if with_cache else None
+    geom = model_geometry(model) if s["moe"] else None       # the RAM pre-check needs it too, not only the cache arms
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{m.fingerprint()}-{sha256_head(model)}-{engine.name}"
     log = out_dir / (profile_name(stem, ubatch)[:-len(".json")] + ".server.log")
@@ -671,13 +733,34 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
                 else:
                     c.n_gpu_layers = k
                 row = dict(c.to_row(), arm="walk", exact_class=c.exact_class(s["block_count"]))
+                if not ram_precheck(row, host_ram_need_mib(s, c, geom), machine.ram_mib()[1]):
+                    cell.append(row)                      # skipped before starting: later rows need less RAM
+                    print(json.dumps(row), flush=True)
+                    continue
                 measure(engine, model, c, row, log, n_predict, probe_prompt, repeats)
                 judge(row, total_vram, vram_margin_mib, best, collapse)
                 best = max(best, row["tg_tps"]) if row["status"] == "ok" else best
                 cell.append(row)
                 print(json.dumps(row), flush=True)
+                if ram_exhausted(row):
+                    time.sleep(5)                         # RAM, not VRAM: the next row puts more on the GPU
+                    continue
                 if row["status"] != "ok":
                     break
+                time.sleep(5)
+            n = s["block_count"] or 0
+            first = next((r for r in cell if r.get("n_cpu_moe") == n), None)
+            if s["moe"] and with_cache and first is not None and first["status"] in RAM_STATUSES:
+                # The cache arms need the all-experts-on-CPU point's VRAM share. Read in fully it did not fit RAM;
+                # memory-mapped (as the cache arms load) its VRAM share is the same and its pages are file cache.
+                c = Config(ctx=ctx, cache_type=kv, threads=threads, ubatch=ubatch, n_gpu_layers=999, n_cpu_moe=n,
+                           load_mode="mmap")
+                row = dict(c.to_row(), arm="walk-mmap", exact_class=c.exact_class(n))
+                measure(engine, model, c, row, log, n_predict, probe_prompt, repeats)
+                judge(row, total_vram, vram_margin_mib, 0.0, collapse)
+                ram_exhausted(row)
+                cell.append(row)
+                print(json.dumps(row), flush=True)
                 time.sleep(5)
             rows += cell
             if ladder:
@@ -721,6 +804,7 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
         doc["thread_search"] = {"skipped": "--threads fixed the thread count" if threads is not None
                                 else "the processor count could not be read"}
     doc["ubatch_report"] = ubatch_report(rows)
+    doc["skipped"] = skipped_rows(rows)                  # what did not measure, and why (the planner reports it)
     out = out_dir / profile_name(stem, ubatch)
     if out.exists():                                     # a new profile replaces the old one; keep one previous copy
         out.replace(out.with_name(out.name + ".prev"))
