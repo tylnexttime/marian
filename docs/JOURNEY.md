@@ -771,6 +771,20 @@ the next calibration the retry was exercised: the same row failed twice and was 
 on the CPU, and the stock plan rose to 56.9 tokens/s. That row failed three times in two calibrations while its
 neighbours loaded, so the cause is something about that split, not chance; it is not yet examined. Table A56.
 
+**16. Why that row fails, and whose it is (Tuesday 17/11/2026).** A probe of 22 single loads examined it. At 30
+layers of experts on the CPU, with the weights read fully into RAM, the load failed 3 of 3 times, and at 31 as well;
+29, 28 and 32 loaded. It is upstream: a pure llama.cpp build near Marian's pin fails the same way, and so do pure
+v1.0.0 and v1.0.0 with Marian's patches. Our first guess, from reading the loader, was wrong. We thought only the
+failing split took the asynchronous upload path, but every neighbour takes it too. What does decide it is pinned
+memory. The CPU expert weights go into one pinned host buffer that grows by 464 MiB per step. At 28 and 29 (13.6 and
+14.1 GB) it pins and loads. At 30 and 31 (14.5 and 15.0 GB) it pins, then the upload fails with "out of memory" and
+the server aborts. At 32 (15.5 GB) pinning fails, the allocator falls back to ordinary memory as designed, and it
+loads. Both arms with pinned memory disabled (`GGML_CUDA_NO_PINNED=1`) loaded, and so did both arms that map the file
+instead. The pattern suggests a page-locked memory ceiling on this machine, with a band just under it where the pin
+succeeds but leaves too little for what follows. That reading is inferred from five buffer sizes, not measured. The
+calibration walk already steps past such a row (point 15). Retrying it once with pinned memory disabled would recover
+the row itself; that is not built. Table A57.
+
 ## 7. What is next
 
 **As of 11/11/2026:** the fork is in maintenance (section 6e) and none of the open items below is scheduled. The
@@ -2193,3 +2207,17 @@ Groot and Gemma, decode records (10 prompts, 128 tokens each), same flags on bot
 | Walk, 28 to 12 | measured, 43.0 to 57.7 tokens/s |
 | Walk, 10 | overflow: the walk ends on VRAM |
 | Plans for 8,192 tokens | stock: 14 layers of experts on CPU, 56.9 tokens/s (38.7 before the fix); exact-class: expert cache 12,096 MiB, 34.0 tokens/s |
+
+#### A57. One load per arm at the failing split (same model, ctx 8192, weights read into RAM unless stated)
+
+| Arms | Pinned host buffer | Result |
+|---|---|---|
+| Marian build, experts on CPU 28 / 29 | 13,605 / 14,069 MiB | loaded |
+| Marian build, 30 (x3) / 31 | 14,533 / 14,997 MiB | failed every time, "out of memory" at an event sync, about 6 s in |
+| Marian build, 32 | 15,461 MiB requested, pinning failed, ordinary memory used | loaded |
+| Marian build, 30, file mapped (x2) | none | loaded |
+| Marian build, 30, `GGML_CUDA_NO_PINNED=1` (x2) | none | loaded |
+| Marian build, 30, `CUDA_LAUNCH_BLOCKING=1` | 14,533 MiB | failed the same way |
+| Pure llama.cpp near the pin: 30 (x2) / 32 / 28 | as above | failed / loaded / loaded |
+| Pure v1.0.0: 30 (x2) / 32 / 28 | as above | failed / loaded / loaded |
+| v1.0.0 with Marian's patches: 30 (x2) | as above | failed |
