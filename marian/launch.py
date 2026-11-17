@@ -197,9 +197,11 @@ def check(row: dict, doc: dict, model: Path, model_id: str, engine, *, stock: bo
 
 
 def settings(cfg) -> dict:
-    """The two non-placement settings of a configuration, spelt out (for --dry-run, --json and diag)."""
+    """The non-placement settings of a configuration, spelt out (for --dry-run, --json and diag): ubatch, prefill
+    source, and the environment the server is started with beyond the inherited one (E91: GGML_CUDA_NO_PINNED)."""
     return {"ubatch": cfg.n_ubatch, "ubatch_flag": cfg.ubatch is not None,
-            "prefill_source": cfg.prefill_source or "mmap", "prefill_flag": cfg.prefill_source is not None}
+            "prefill_source": cfg.prefill_source or "mmap", "prefill_flag": cfg.prefill_source is not None,
+            "server_env": cfg.server_env()}
 
 
 def settings_line(cfg) -> str:
@@ -208,7 +210,10 @@ def settings_line(cfg) -> str:
           else f"ubatch {st['ubatch']} (the default, no flag)")
     pf = ("prefill source p3 (--moe-prefill-source p3: large-batch misses from the ring and tier)"
           if st["prefill_flag"] else "prefill source mmap (the default, upstream's path, no flag)")
-    return f"settings: {ub}; {pf}"
+    env = "".join(f"; environment {k}={v}" for k, v in st["server_env"].items())
+    if st["server_env"].get("GGML_CUDA_NO_PINNED"):
+        env += " (this row loaded only without pinned memory when it was measured)"
+    return f"settings: {ub}; {pf}{env}"
 
 
 def trade_lines(doc: dict, others: list[dict]) -> list[str]:

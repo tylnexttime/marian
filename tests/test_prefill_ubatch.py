@@ -121,8 +121,8 @@ class PrefillConfig(unittest.TestCase):
         self.assertIsNone(c.prefill_source)
         self.assertNotIn("--moe-prefill-source", LlamaCpp("x").command(Path("m.gguf"), c))
         self.assertEqual(plan.to_config(dict(c.to_row(), prefill_source="mmap")).key(), c.key())
-        old_key = json.dumps({k: v for k, v in c.__dict__.items() if k not in ("prefill_source", "ubatch")},
-                             sort_keys=True)
+        old_key = json.dumps({k: v for k, v in c.__dict__.items() if k not in ("prefill_source", "ubatch", "no_pinned")},
+                             sort_keys=True)          # no_pinned (E91) did not exist then either
         self.assertEqual(c.key(), old_key)                  # a `confirmed` record written before still matches
 
     def test_planner_and_launch_check_refuse_a_hand_edited_pairing(self):

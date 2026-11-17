@@ -189,14 +189,16 @@ class NoHostname(unittest.TestCase):
             return [["0"]] if query == "memory.used" else [["0", "Test GPU", "8151", "1.0", "5", "4"]]
 
         with tempfile.TemporaryDirectory() as d, mock.patch("platform.node", return_value=host), \
-                mock.patch.object(machine, "nvidia_smi", smi), mock.patch.object(profile.time, "sleep", lambda s: None):
+                mock.patch.object(machine, "nvidia_smi", smi), mock.patch.object(profile.time, "sleep", lambda s: None), \
+                mock.patch.object(machine, "ram_mib", lambda: (32000, 16000)):   # not the live machine's RAM
             model = Path(d) / "m.gguf"
             write_gguf(model, {"general.architecture": "toy", "toy.block_count": 2, "toy.expert_count": 4,
                                "toy.expert_used_count": 2, "toy.context_length": 4096})
             out = profile.run(model, FakeEngine(), [4096], ["f16"], 2, None, Path(d) / "profiles")
             text = out.read_text(encoding="utf-8")
         doc = json.loads(text)
-        # a start that fails with VRAM and RAM to spare is retried once, then recorded load_failed (17/11/2026)
+        # a start that fails with VRAM and RAM to spare is retried once, then once without pinned memory (E91),
+        # then recorded load_failed (17/11/2026)
         self.assertEqual((doc["rows"][0]["status"], doc["rows"][0]["failed_as"]), ("load_failed", "start_failed"))
         self.assertNotIn(host, text)
         self.assertNotIn(digest[:6], text)   # any hash prefix of 6+ hex characters
@@ -229,7 +231,8 @@ class NoHostname(unittest.TestCase):
 
         orig_sleep = real_time.sleep                  # profile.time IS the time module: keep the real one
         with tempfile.TemporaryDirectory() as d, mock.patch.object(machine, "nvidia_smi", smi), \
-                mock.patch.object(profile.time, "sleep", lambda s: orig_sleep(min(s, 0.02))):
+                mock.patch.object(profile.time, "sleep", lambda s: orig_sleep(min(s, 0.02))), \
+                mock.patch.object(machine, "ram_mib", lambda: (32000, 16000)):   # not the live machine's RAM
             model = Path(d) / "m.gguf"
             write_gguf(model, {"general.architecture": "toy", "toy.block_count": 2, "toy.expert_count": 4,
                                "toy.expert_used_count": 2, "toy.context_length": 4096})

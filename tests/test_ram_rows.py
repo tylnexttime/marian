@@ -142,10 +142,11 @@ class Walk(unittest.TestCase):
         eng = LoadFails()
         doc = self.run_profile(eng, lambda: 16000, None)
         walk = [r for r in doc["rows"] if r["arm"] == "walk"]
-        # one ok row gives no VRAM prediction, so the failure is retried once and then recorded load_failed
-        # (tests/test_load_retry.py); with 16 GB free it is never ram_exhausted
+        # one ok row gives no VRAM prediction, so the failure is retried once, then once without pinned memory,
+        # and then recorded load_failed (tests/test_load_retry.py, test_no_pinned_retry.py); with 16 GB free it is
+        # never ram_exhausted
         self.assertEqual([(r["n_cpu_moe"], r["status"]) for r in walk], [(2, "ok"), (0, "load_failed")])
-        self.assertEqual(sum(1 for c in eng.started if c.n_cpu_moe == 0 and not c.moe_cache_mib), 2)
+        self.assertEqual(sum(1 for c in eng.started if c.n_cpu_moe == 0 and not c.moe_cache_mib), 3)
         self.assertFalse(any(r["arm"] == "walk-mmap" for r in doc["rows"]))   # the first row ran: no twin needed
 
     def test_nothing_ran_and_the_planner_says_why(self):

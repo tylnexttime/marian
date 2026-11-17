@@ -102,6 +102,10 @@ RAM_STATUSES = ("skipped_ram", "ram_exhausted")
 # an event sync, 3.3 s in) with VRAM at 7.0 of 16 GB and 4.9 GB of RAM free, between rows that ran; the walk stopped
 # there and the planner got a slower row. Such a failure is retried once; failing again it is recorded load_failed and
 # the walk goes on. Only VRAM evidence ends the walk: an overflow, a peak near full, or a predicted peak near full.
+# The same evening (E90) the cause was found: the row's pinned expert buffer lands just under the machine's
+# page-locked limit, so the pin succeeds and the upload aborts, every time; without pinned memory it loads. So a row
+# that fails twice gets a third attempt with GGML_CUDA_NO_PINNED=1 (Config.no_pinned), recorded in the row, before it
+# is load_failed.
 LOAD_FAIL_STATUSES = ("start_failed", "probe_failed")
 
 FILLER = ("The workshop opens at eight. Apprentices sign in, check the job board and collect their tools. "
@@ -786,10 +790,24 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
                     row["first_attempt"] = first_try
                     if row["status"] in LOAD_FAIL_STATUSES and not ram_exhausted(row) \
                             and not vram_evidence(row, cell, knob, total_vram, vram_margin_mib):
-                        row["failed_as"] = row["status"]
-                        row["status"] = "load_failed"
-                        row["note"] = (f"failed twice with RAM and VRAM below their limits "
-                                       f"({row.get('note') or 'no note'})")
+                        # Failed twice the same way: not chance. E90 (17/11/2026): the CPU expert weights go into one
+                        # pinned host buffer; just under the machine's page-locked limit the pin succeeds and the
+                        # upload aborts, every time. Without pinned memory the same row loads. One try that way.
+                        second_try = {k: row.get(k) for k in ("status", "note", "ram_avail_low_mib", "vram_peak_mib")}
+                        print(json.dumps(dict(row, retrying="no_pinned")), flush=True)
+                        time.sleep(5)
+                        c_np = dataclasses.replace(c, no_pinned=True)
+                        row = dict(fresh, no_pinned=True)
+                        measure(engine, model, c_np, row, log, n_predict, probe_prompt, repeats)
+                        judge(row, total_vram, vram_margin_mib, best, collapse)
+                        row["first_attempt"] = first_try
+                        row["second_attempt"] = second_try
+                        if row["status"] in LOAD_FAIL_STATUSES and not ram_exhausted(row) \
+                                and not vram_evidence(row, cell, knob, total_vram, vram_margin_mib):
+                            row["failed_as"] = row["status"]
+                            row["status"] = "load_failed"
+                            row["note"] = (f"failed twice with RAM and VRAM below their limits, and a third time "
+                                           f"without pinned memory ({row.get('note') or 'no note'})")
                 best = max(best, row["tg_tps"]) if row["status"] == "ok" else best
                 cell.append(row)
                 print(json.dumps(row), flush=True)

@@ -98,19 +98,20 @@ class Walk(unittest.TestCase):
         self.assertEqual(starts(eng, 4), 2)
         self.assertEqual(starts(eng, 0), 1)       # predicted 8,200 MiB: VRAM evidence, no retry, the walk ends
 
-    def test_failing_twice_is_load_failed_and_the_walk_goes_on(self):
-        eng = Walker(flaky={4: 2})
+    def test_failing_three_times_is_load_failed_and_the_walk_goes_on(self):
+        eng = Walker(flaky={4: 3})        # twice as recorded, once without pinned memory (E91)
         doc, walk = walk_of(eng)
         self.assertEqual([(r["n_cpu_moe"], r["status"]) for r in walk],
                          [(8, "ok"), (6, "ok"), (4, "load_failed"), (2, "ok"), (0, "start_failed")])
         self.assertEqual(walk[2]["failed_as"], "start_failed")
         self.assertIn("failed twice", walk[2]["note"])
+        self.assertEqual(starts(eng, 4), 3)
         self.assertIn("load_failed", launch.skipped_summary(doc["rows"]))
         best = plan.choose(plan.rows_of([(Path("p.json"), doc)]), 3000)
         self.assertEqual(best["n_cpu_moe"], 2)    # the planner reaches past the failed row
 
     def test_two_load_failures_in_a_row_end_the_walk(self):
-        eng = Walker(flaky={6: 2, 4: 2})
+        eng = Walker(flaky={6: 3, 4: 3})
         _, walk = walk_of(eng)
         self.assertEqual([(r["n_cpu_moe"], r["status"]) for r in walk],
                          [(8, "ok"), (6, "load_failed"), (4, "load_failed")])

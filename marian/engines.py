@@ -21,6 +21,7 @@ Two settings of a configuration are not placements (M1.3, decided after register
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import time
@@ -60,6 +61,7 @@ class Config:
     ring_mib: int | None = None       # Marian P3: pinned staging ring; None = the fork's default (64 MiB)
     prefill_source: str | None = None  # Marian 0009: p3 | None = mmap (the default, upstream's path, no flag)
     ubatch: int | None = None         # the declared -ub (and -b); None = 512, the default, no flag
+    no_pinned: bool = False           # start the server with GGML_CUDA_NO_PINNED=1 (E91: the pinned band, E90)
     extra: list[str] = field(default_factory=list)
 
     def __post_init__(self):
@@ -94,8 +96,17 @@ class Config:
     def key(self) -> str:
         """A comparable string of the launch configuration. The two settings added for M1.3's prefill rows are left
         out at their defaults, so a key recorded before them (a `confirmed` record's `by`) still matches its row."""
-        d = {k: v for k, v in self.__dict__.items() if not (k in ("prefill_source", "ubatch") and v is None)}
+        d = {k: v for k, v in self.__dict__.items() if not (k in ("prefill_source", "ubatch") and v is None)
+             and not (k == "no_pinned" and not v)}
         return json.dumps(d, sort_keys=True)
+
+    def server_env(self) -> dict[str, str]:
+        """Environment variables this configuration adds to the server's (everything else is inherited unchanged).
+
+        no_pinned (17/11/2026, E90): with -lm none the CPU expert weights go into one pinned host buffer. On a machine
+        where that buffer lands just under the page-locked limit, the pin succeeds and the upload that follows aborts
+        with "out of memory"; with GGML_CUDA_NO_PINNED=1 the same row loads. Upstream behaviour, not Marian's."""
+        return {"GGML_CUDA_NO_PINNED": "1"} if self.no_pinned else {}
 
     def marian_flags(self) -> list[str]:
         """The Marian-only flags this configuration passes; empty means a stock llama.cpp can run it."""
@@ -133,6 +144,8 @@ class Config:
         r.update({k: getattr(self, k) for k in SOURCE_FIELDS if getattr(self, k) is not None})
         if self.ubatch is not None:
             r["ubatch"] = self.ubatch
+        if self.no_pinned:
+            r["no_pinned"] = True
         return r
 
     @classmethod
@@ -148,6 +161,7 @@ class Config:
         for k in SOURCE_FIELDS + ("ubatch",):
             if row.get(k) is not None:
                 setattr(c, k, row[k])
+        c.no_pinned = bool(row.get("no_pinned"))
         return c.normalise()
 
 
@@ -244,9 +258,12 @@ class LlamaCpp:
         cmd = self.command(model, c)
         for attempt in range(1, attempts + 1):
             with open(log, "a", encoding="utf-8") as lf:
-                lf.write(f"\n# attempt {attempt}: {' '.join(cmd)}\n")
+                env_note = "".join(f"{k}={v} " for k, v in c.server_env().items())
+                lf.write(f"\n# attempt {attempt}: {env_note}{' '.join(cmd)}\n")
             lf = open(log, "a", encoding="utf-8")
-            self.proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT)
+            extra_env = c.server_env()
+            env = dict(os.environ, **extra_env) if extra_env else None    # None: inherit unchanged
+            self.proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, env=env)
             t0 = time.time()
             while time.time() - t0 < timeout:
                 if self.proc.poll() is not None:
