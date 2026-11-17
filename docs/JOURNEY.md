@@ -760,6 +760,17 @@ neither ends the walk, a memory-mapped twin of the first row serves as the cache
 planner say which rows did not run and why. With RAM held at the failing level, calibration skipped six rows, measured
 nine, ran the cache arms and froze an exact-class plan. Table A55.
 
+**15. A walk row that fails to load with room to spare (Tuesday 17/11/2026).** In a later calibration of the same
+model with more RAM free, the row with 30 layers of experts on the CPU failed to load ("CUDA error: out of memory",
+3.3 s in) with VRAM at 7.0 of 16 GB and several GB of RAM free, between rows that loaded. The walk treated any failure
+as "VRAM is full" and stopped there, so the planner chose a slower row (38.7 tokens/s). Now a failed row with no RAM
+or VRAM evidence is retried once; failing again it is recorded `load_failed` and the walk goes on. VRAM evidence means
+an overflow, a peak near full, or a peak predicted near full by a straight line through the walk's last two good rows
+(a failed load can stop short of the allocation that failed). Two `load_failed` rows in a row still end the walk. On
+the next calibration the retry was exercised: the same row failed twice and was recorded, the walk reached 12 layers
+on the CPU, and the stock plan rose to 56.9 tokens/s. That row failed three times in two calibrations while its
+neighbours loaded, so the cause is something about that split, not chance; it is not yet examined. Table A56.
+
 ## 7. What is next
 
 **As of 11/11/2026:** the fork is in maintenance (section 6e) and none of the open items below is scheduled. The
@@ -2171,3 +2182,14 @@ Groot and Gemma, decode records (10 prompts, 128 tokens each), same flags on bot
 | Memory-mapped twin of row 40 | measured, the cache arms' base |
 | Cache arms | ran: best budget 13,068 MiB, ring and tier sources, two drift rungs |
 | Plans for 8,192 tokens | exact-class: expert cache 12,608 MiB, 11.7 tokens/s; stock: 14 layers of experts on CPU, 61.8 tokens/s |
+
+#### A56. A walk past a load failure (same model, about 17 GB available, ctx 8192)
+
+| Rows | Result |
+|---|---|
+| Walk, experts on CPU 40 to 34 | skipped before starting (RAM) |
+| Walk, 32 | measured, 39.4 tokens/s |
+| Walk, 30 | failed to load twice with VRAM at 7.0 of 16 GB and RAM to spare: `load_failed`, the walk goes on |
+| Walk, 28 to 12 | measured, 43.0 to 57.7 tokens/s |
+| Walk, 10 | overflow: the walk ends on VRAM |
+| Plans for 8,192 tokens | stock: 14 layers of experts on CPU, 56.9 tokens/s (38.7 before the fix); exact-class: expert cache 12,096 MiB, 34.0 tokens/s |
