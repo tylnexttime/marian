@@ -785,6 +785,16 @@ succeeds but leaves too little for what follows. That reading is inferred from f
 calibration walk already steps past such a row (point 15). Retrying it once with pinned memory disabled would recover
 the row itself; that is not built. Table A57.
 
+**17. Recovering that row without pinned memory (Tuesday 17/11/2026, evening).** Now built. A walk row that fails
+twice with RAM and VRAM to spare gets one more attempt with `GGML_CUDA_NO_PINNED=1`. That variable goes into that
+server's environment only; every other row inherits the environment unchanged. A row that loads this way is kept with
+`"no_pinned": true`, and `second_attempt` is recorded beside `first_attempt`. If it fails again it is `load_failed` as
+before. The setting belongs to the row's launch configuration. The planner and `serve` start such a row with the
+variable set, and `--dry-run` and `--json` show it in the settings. Profiles written before it still match, because
+the key leaves the setting out unless it is set. On the next calibration, row 30 failed twice, loaded on the third
+attempt, and measured 41.4 tokens/s. It was the only row with the setting. The walk went on to 12 layers and ended on
+VRAM at 10, and the same row relaunched from the profile through the planner's path answered in 17 s. Table A58.
+
 ## 7. What is next
 
 **As of 11/11/2026:** the fork is in maintenance (section 6e) and none of the open items below is scheduled. The
@@ -2221,3 +2231,15 @@ Groot and Gemma, decode records (10 prompts, 128 tokens each), same flags on bot
 | Pure llama.cpp near the pin: 30 (x2) / 32 / 28 | as above | failed / loaded / loaded |
 | Pure v1.0.0: 30 (x2) / 32 / 28 | as above | failed / loaded / loaded |
 | v1.0.0 with Marian's patches: 30 (x2) | as above | failed |
+
+#### A58. The walk with a third attempt without pinned memory (same model, about 19.7 GB available, ctx 8192)
+
+| Rows | Result |
+|---|---|
+| Walk, experts on CPU 40, 38 | skipped before starting (RAM) |
+| Walk, 36 to 32 | measured, 35.3 to 38.1 tokens/s |
+| Walk, 30 | failed twice (VRAM 7.0 of 16 GB, RAM to spare), then loaded without pinned memory: 41.4 tokens/s, `no_pinned` |
+| Walk, 28 to 12 | measured, 33.6 to 54.1 tokens/s |
+| Walk, 10 | overflow: the walk ends on VRAM |
+| Row 30 relaunched from the profile | started with `GGML_CUDA_NO_PINNED=1`, ready in 17 s, answered |
+| Plans for 8,192 tokens | stock: 14 layers of experts on CPU, 52.9 tokens/s; exact-class: expert cache 12,608 MiB, 18.75 tokens/s |
