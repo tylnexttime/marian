@@ -98,6 +98,11 @@ REPEATS_MAX = 3           # probes per row: 1 by default, up to 3 on request (Ch
 RAM_RESERVE_MIB = 1536    # a -lm none walk row starts only if its estimated RAM leaves at least this much available
 RAM_EXHAUSTED_MIB = 512   # a failed row whose available RAM fell below this ran out of RAM, not VRAM
 RAM_STATUSES = ("skipped_ram", "ram_exhausted")
+# Transient load failures (17/11/2026, the same afternoon): a walk row failed to load ("CUDA error: out of memory" at
+# an event sync, 3.3 s in) with VRAM at 7.0 of 16 GB and 4.9 GB of RAM free, between rows that ran; the walk stopped
+# there and the planner got a slower row. Such a failure is retried once; failing again it is recorded load_failed and
+# the walk goes on. Only VRAM evidence ends the walk: an overflow, a peak near full, or a predicted peak near full.
+LOAD_FAIL_STATUSES = ("start_failed", "probe_failed")
 
 FILLER = ("The workshop opens at eight. Apprentices sign in, check the job board and collect their tools. "
           "Safety briefings come first, then practical tasks, then a short review before lunch. ")
@@ -447,6 +452,34 @@ def ram_exhausted(row: dict, low_mib: int = RAM_EXHAUSTED_MIB) -> bool:
     return False
 
 
+def predicted_vram_mib(row: dict, cell: list[dict], knob: str) -> int | None:
+    """The VRAM peak a walk row should reach, extrapolated in a straight line from the last two ok walk rows of its
+    cell (VRAM grows by about one layer's share per step of the knob), or None with fewer than two to go on."""
+    pts = [(r[knob], r["vram_peak_mib"]) for r in cell
+           if r.get("arm", "walk") == "walk" and r["status"] == "ok" and r.get(knob) is not None and r.get("vram_peak_mib")]
+    if len(pts) < 2 or row.get(knob) is None:
+        return None
+    (k1, v1), (k2, v2) = pts[-2], pts[-1]
+    if k1 == k2:
+        return None
+    return round(v2 + (v2 - v1) / (k2 - k1) * (row[knob] - k2))
+
+
+def vram_evidence(row: dict, cell: list[dict], knob: str, total_vram: int, margin_mib: int) -> bool:
+    """Whether a row's failure is VRAM's: an overflow, a measured peak within the margin of full, or a predicted peak
+    (predicted_vram_mib) within it. A failed load's measured peak can stop short of the allocation that failed, so
+    the prediction is what judges a row that never finished loading."""
+    if row.get("status") == "overflow":
+        return True
+    if not total_vram:
+        return True                                     # no total to compare with: assume VRAM, the old behaviour
+    limit = total_vram - margin_mib
+    if (row.get("vram_peak_mib") or 0) >= limit:
+        return True
+    pred = predicted_vram_mib(row, cell, knob)
+    return pred is not None and pred >= limit
+
+
 def skipped_rows(rows: list[dict]) -> list[dict]:
     """Every row that did not measure, with why: what the planner and the calibration summary report."""
     keys = ("ctx", "kv", "arm", "n_cpu_moe", "n_gpu_layers", "load_mode", "moe_cache_mib", "miss_source")
@@ -737,16 +770,39 @@ def run(model: Path, engine: LlamaCpp, ctxs: list[int], kvs: list[str], step: in
                     cell.append(row)                      # skipped before starting: later rows need less RAM
                     print(json.dumps(row), flush=True)
                     continue
+                fresh = dict(row)                         # the row as it was before measuring, for a retry
                 measure(engine, model, c, row, log, n_predict, probe_prompt, repeats)
                 judge(row, total_vram, vram_margin_mib, best, collapse)
+                if row["status"] in LOAD_FAIL_STATUSES and not ram_exhausted(row) \
+                        and not vram_evidence(row, cell, knob, total_vram, vram_margin_mib):
+                    # neither RAM nor VRAM near its limit: a transient load failure (17/11/2026: -ncmoe 30 failed at
+                    # 7.0 of 16 GB VRAM and 4.9 GB RAM free, between rows that ran). Try once more before judging.
+                    first_try = {k: row.get(k) for k in ("status", "note", "ram_avail_low_mib", "vram_peak_mib")}
+                    print(json.dumps(dict(row, retrying=True)), flush=True)
+                    time.sleep(5)
+                    row = fresh
+                    measure(engine, model, c, row, log, n_predict, probe_prompt, repeats)
+                    judge(row, total_vram, vram_margin_mib, best, collapse)
+                    row["first_attempt"] = first_try
+                    if row["status"] in LOAD_FAIL_STATUSES and not ram_exhausted(row) \
+                            and not vram_evidence(row, cell, knob, total_vram, vram_margin_mib):
+                        row["failed_as"] = row["status"]
+                        row["status"] = "load_failed"
+                        row["note"] = (f"failed twice with RAM and VRAM below their limits "
+                                       f"({row.get('note') or 'no note'})")
                 best = max(best, row["tg_tps"]) if row["status"] == "ok" else best
                 cell.append(row)
                 print(json.dumps(row), flush=True)
-                if ram_exhausted(row):
+                if row["status"] in RAM_STATUSES:
                     time.sleep(5)                         # RAM, not VRAM: the next row puts more on the GPU
                     continue
+                if row["status"] == "load_failed":
+                    if [r["status"] for r in cell[-2:]] == ["load_failed", "load_failed"]:
+                        break                             # two rows in a row: a limit we cannot name, not chance
+                    time.sleep(5)
+                    continue
                 if row["status"] != "ok":
-                    break
+                    break                                 # VRAM evidence (overflow, near full, or predicted full)
                 time.sleep(5)
             n = s["block_count"] or 0
             first = next((r for r in cell if r.get("n_cpu_moe") == n), None)
