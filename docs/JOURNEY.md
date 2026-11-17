@@ -741,6 +741,25 @@ with only upstream's cache flags; no pure 1.0 build was run, so whether the Groo
 open, and that is the next test, registered before its run. "No further night" is withdrawn. The CPU-share result
 above is one run per arm.
 
+**13. E87 (Tuesday 17/11/2026, same day): the port is identical to pure 1.0, and the Groot mismatch is upstream's.**
+We built pure llama.cpp v1.0.0 with the port's recipe and compared, at all-VRAM and on Groot's expert-cache flags.
+Both references reproduced exactly (pure 1.0 against itself, and the port against the night before). The port's
+all-VRAM answers are identical to pure 1.0's on Gemma and Groot: the nine patches change nothing there. On Groot's
+cache flags, pure 1.0 itself departs from all-VRAM, and the port is identical to pure 1.0. The cause is kernel fusion:
+with `GGML_CUDA_DISABLE_FUSION=1` on both sides, the cache path matches all-VRAM on both builds, so on 1.0 the fused
+path is taken differently with the expert cache than without it. That is upstream's behaviour; we record it and do
+not patch it. The Swift and speed blocks were cut by the memory guard and give no result. The port still does not
+land (speed), and the pin stays. Table A54.
+
+**14. Calibration on a laptop with less RAM than the model (Tuesday 17/11/2026).** Calibrating a 21 GB MoE (40 layers,
+18.8 GB of experts) with about 15 GB of RAM available failed before measuring anything: the walk's first row puts
+every expert on the CPU and reads it fully into RAM (`-lm none`), ran RAM out and died at load, and, being first,
+ended the walk. No row meant no cache arms (they use that row as their base) and no plan. Now a `-lm none` row whose
+estimated RAM would leave less than 1.5 GB available is skipped before it starts, a row that runs RAM out is recorded,
+neither ends the walk, a memory-mapped twin of the first row serves as the cache arms' base, and the profile and the
+planner say which rows did not run and why. With RAM held at the failing level, calibration skipped six rows, measured
+nine, ran the cache arms and froze an exact-class plan. Table A55.
+
 ## 7. What is next
 
 **As of 11/11/2026:** the fork is in maintenance (section 6e) and none of the open items below is scheduled. The
@@ -2123,3 +2142,32 @@ Exactness on the 1.0 build:
 | Groot: expert cache (two arms), tier, ring, each vs all-VRAM | 1/10 each (max 0.225) | differ, and identical to each other |
 | Groot: ring+prefill, contrast, second all-VRAM, old build | not run (cut) | |
 | Gemma with `--moe-cache-cpu-share 0.5` vs all-VRAM | 0/10 | differs (class A); 29.6 vs 36.2 tokens/s |
+
+#### A54. E87: the port against pure llama.cpp 1.0
+
+Groot and Gemma, decode records (10 prompts, 128 tokens each), same flags on both builds:
+
+| Comparison | Texts identical | Result |
+|---|---|---|
+| Pure 1.0 all-VRAM, run twice (Groot) | 10/10 | reproduces |
+| Port all-VRAM vs the night before (Groot) | 10/10 | reproduces |
+| Pure 1.0 vs port, all-VRAM (Gemma; Groot) | 10/10; 10/10 | identical: the patches change nothing |
+| Pure 1.0 expert cache vs pure 1.0 all-VRAM (Groot) | 1/10 (max 0.225) | differs: upstream's own cache path |
+| Port expert cache vs pure 1.0 expert cache (Groot) | 10/10 | identical |
+| Fusion off: expert cache vs all-VRAM, pure 1.0; port | 10/10; 10/10 | identical: fusion is the cause |
+| KV-rows path off: expert cache vs all-VRAM | 1/10 | still differs |
+| Contrast (`-ncmoe 20`) vs all-VRAM, both builds | 1/10 | differs (the comparison can see a difference) |
+| Port ring + P3 prefill vs port expert cache (Groot) | 10/10 | identical |
+| Old build vs 1.0, all-VRAM (Groot) | 2/10 (max 0.663) | upstream's 1.0 drift |
+| Swift same-base and speed blocks | not run | cut by the memory guard |
+
+#### A55. Calibration with RAM-limited rows (21 GB MoE, about 15.4 GB available, ctx 8192)
+
+| Rows | Result |
+|---|---|
+| Walk, experts on CPU 40 to 30 (`-lm none`) | skipped before starting: need 18.8 down to 14.1 GB |
+| Walk, 28 to 12 | measured, decode 32 to 61 tokens/s |
+| Walk, 10 | overflow (speed collapse): the walk ends on VRAM |
+| Memory-mapped twin of row 40 | measured, the cache arms' base |
+| Cache arms | ran: best budget 13,068 MiB, ring and tier sources, two drift rungs |
+| Plans for 8,192 tokens | exact-class: expert cache 12,608 MiB, 11.7 tokens/s; stock: 14 layers of experts on CPU, 61.8 tokens/s |
